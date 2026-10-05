@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="description" content="Mob Swarm - an ad-free, battery-friendly multiplier mob shooter.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0b1020">
+<title>Mob Swarm</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%;
+    background: #0b1020; overflow: hidden;
+    overscroll-behavior: none; touch-action: none;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  #wrap { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  #stage { position: relative; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  #overlay {
+    position: absolute; inset: 0; display: none; flex-direction: column;
+    align-items: center; justify-content: center; gap: 22px;
+    background: rgba(8, 12, 28, 0.78);
+  }
+  #overlay.show { display: flex; }
+  #overlay h1 {
+    margin: 0; font-size: 52px; letter-spacing: 1px; color: #fff;
+    text-shadow: 0 0 24px #3aa0ff, 0 0 48px #3aa0ff;
+    animation: pop .5s cubic-bezier(.2,1.6,.4,1);
+  }
+  #overlay button {
+    font: inherit; font-size: 20px; font-weight: 700; color: #fff;
+    padding: 14px 40px; border: 0; border-radius: 999px; cursor: pointer;
+    background: linear-gradient(180deg, #4db3ff, #1c6fe0);
+    box-shadow: 0 6px 0 #124a9c, 0 10px 24px rgba(0,0,0,.5);
+  }
+  #overlay button:active { transform: translateY(4px); box-shadow: 0 2px 0 #124a9c; }
+  @keyframes pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <canvas id="game"></canvas>
+    <div id="overlay">
+      <h1>Victory!</h1>
+      <button id="restart" type="button">Restart</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------- Config (logical portrait space) ----------
+  var W = 360, H = 640;
+  var MAX_MOBS = 1500;           // hard pool capacity
+  var MOB_R = 4;
+  var MOB_SPEED = 250;           // px/s upward
+  var FIRE_RATE = 9;             // shots/s
+  var SPREAD = 14;               // px/s sideways jitter at fire
+  var BASE_MAX_HP = 50;
+  var BASE_Y = 24, BASE_H = 64;  // base rect top / height
+  var BASE_BOTTOM = BASE_Y + BASE_H;
+  var CANNON_Y = H - 56;
+  var MAX_DT = 1 / 20;           // clamp huge frame gaps
+
+  // Gates: type 'x' multiplies (adds n-1 clones), '+' adds n clones.
+  var GATES = [
+    { x: 30,  w: 140, y: 340, h: 26, type: 'x', n: 2, label: 'x2' },
+    { x: 190, w: 140, y: 340, h: 26, type: '+', n: 5, label: '+5' }
+  ];
+  var GATE_COUNT = GATES.length;
+
+  // ---------- Mob pool: pre-allocated parallel typed arrays ----------
+  var mx = new Float32Array(MAX_MOBS);
+  var my = new Float32Array(MAX_MOBS);
+  var mvx = new Float32Array(MAX_MOBS);
+  var mvy = new Float32Array(MAX_MOBS);
+  var mmask = new Uint8Array(MAX_MOBS);   // bit i set => already passed gate i
+  var mobCount = 0;                       // active mobs are indices [0, mobCount)
+
+  function spawnMob(x, y, vx, vy, mask) {
+    if (mobCount >= MAX_MOBS) return false;     // pool exhausted: drop, never allocate
+    var i = mobCount++;
+    mx[i] = x; my[i] = y; mvx[i] = vx; mvy[i] = vy; mmask[i] = mask;
+    return true;
+  }
+  function killMob(i) {                         // swap-remove with last active
+    var l = --mobCount;
+    if (i !== l) {
+      mx[i] = mx[l]; my[i] = my[l]; mvx[i] = mvx[l]; mvy[i] = mvy[l]; mmask[i] = mmask[l];
+    }
+  }
+
+  // ---------- State ----------
+  var baseHP = BASE_MAX_HP;
+  var won = false;
+  var cannonX = W / 2, targetX = W / 2;
+  var fireAcc = 0;
+  var hitFlash = 0;
+  var gateFlash = new Float32Array(GATE_COUNT);
+
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d', { alpha: false });
+  var stage = document.getElementById('stage');
+  var overlay = document.getElementById('overlay');
+  var restartBtn = document.getElementById('restart');
+  var scale = 1;
+
+  // ---------- Responsive scaling ----------
+  function resize() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    scale = Math.min(vw / W, vh / H);
+    var cw = Math.floor(W * scale), ch = Math.floor(H * scale);
+    stage.style.width = cw + 'px';
+    stage.style.height = ch + 'px';
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);   // cap DPR for battery
+    canvas.width = Math.floor(cw * dpr);
+    canvas.height = Math.floor(ch * dpr);
+    ctx.setTransform(canvas.width / W, 0, 0, canvas.height / H, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  window.addEventListener('orientationchange', resize);
+
+  // ---------- Input (Pointer Events: touch + mouse) ----------
+  function pointerToLogicalX(e) {
+    var r = canvas.getBoundingClientRect();
+    var x = (e.clientX - r.left) / r.width * W;
+    return x < 16 ? 16 : (x > W - 16 ? W - 16 : x);
+  }
+  var dragging = false;
+  canvas.addEventListener('pointerdown', function (e) {
+    dragging = true;
+    targetX = pointerToLogicalX(e);
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    e.preventDefault();
+  });
+  canvas.addEventListener('pointermove', function (e) {
+    if (dragging || e.pointerType === 'mouse') targetX = pointerToLogicalX(e);
+    e.preventDefault();
+  });
+  function endDrag() { dragging = false; }
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
+  document.addEventListener('touchmove', function (e) { e.preventDefault(); }, { passive: false });
+  document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+  // ---------- Game logic ----------
+  function reset() {
+    mobCount = 0;
+    baseHP = BASE_MAX_HP;
+    won = false;
+    fireAcc = 0;
+    hitFlash = 0;
+    for (var g = 0; g < GATE_COUNT; g++) gateFlash[g] = 0;
+    overlay.classList.remove('show');
+  }
+
+  function applyGate(g, gi, x, y) {
+    var gate = GATES[gi];
+    var extra = gate.type === 'x' ? gate.n - 1 : gate.n;
+    var bit = 1 << gi;
+    gateFlash[gi] = 1;
+    for (var k = 0; k < extra; k++) {
+      // Outward scatter: alternate left/right with random magnitude
+      var dir = (k & 1) ? 1 : -1;
+      var vx = dir * (30 + Math.random() * 70);
+      var vy = -MOB_SPEED * (0.85 + Math.random() * 0.2);
+      if (!spawnMob(x + dir * 3, y - 2 - Math.random() * 6, vx, vy, bit | mmask[g])) break;
+    }
+  }
+
+  function update(dt) {
+    if (won) return;
+
+    // Cannon eases toward target
+    cannonX += (targetX - cannonX) * Math.min(1, dt * 18);
+
+    // Continuous fire
+    fireAcc += dt * FIRE_RATE;
+    while (fireAcc >= 1) {
+      fireAcc -= 1;
+      spawnMob(cannonX, CANNON_Y - 18, (Math.random() - 0.5) * 2 * SPREAD, -MOB_SPEED, 0);
+    }
+
+    // Mobs: iterate with live mobCount (clones appended during loop are safe: they carry the gate bit)
+    var i = 0;
+    while (i < mobCount) {
+      var x = mx[i] + mvx[i] * dt;
+      var y = my[i] + mvy[i] * dt;
+      var vx = mvx[i];
+
+      // Side walls, bounce
+      if (x < MOB_R) { x = MOB_R; vx = -vx; }
+      else if (x > W - MOB_R) { x = W - MOB_R; vx = -vx; }
+      // Scattered mobs bleed lateral speed
+      vx *= (1 - Math.min(1, dt * 2.5));
+      mvx[i] = vx;
+      mx[i] = x; my[i] = y;
+
+      // Gates: trigger once when crossing gate centerline upward
+      var m = mmask[i];
+      for (var gi = 0; gi < GATE_COUNT; gi++) {
+        var bit = 1 << gi;
+        if (m & bit) continue;
+        var gate = GATES[gi];
+        if (y <= gate.y) {
+          mmask[i] = (m |= bit);
+          if (x >= gate.x && x <= gate.x + gate.w) applyGate(i, gi, x, y);
+        }
+      }
+
+      // Opponent base
+      if (y <= BASE_BOTTOM) {
+        if (x >= 10 && x <= W - 10) {
+          baseHP--; hitFlash = 1;
+          killMob(i);
+          if (baseHP <= 0) { baseHP = 0; win(); return; }
+          continue;
+        }
+        if (y < -10) { killMob(i); continue; }
+      }
+      i++;
+    }
+
+    if (hitFlash > 0) hitFlash = Math.max(0, hitFlash - dt * 6);
+    for (var g = 0; g < GATE_COUNT; g++) if (gateFlash[g] > 0) gateFlash[g] = Math.max(0, gateFlash[g] - dt * 4);
+  }
+
+  function win() {
+    won = true;
+    mobCount = 0;
+    overlay.classList.add('show');
+  }
+  restartBtn.addEventListener('click', reset);
+  restartBtn.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+
+  // ---------- Rendering ----------
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function render() {
+    // Background
+    ctx.fillStyle = '#0b1020';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#121a35';
+    ctx.fillRect(10, BASE_BOTTOM, W - 20, H - BASE_BOTTOM);
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(W / 2, BASE_BOTTOM); ctx.lineTo(W / 2, H);
+    ctx.stroke();
+
+    // Opponent base
+    ctx.fillStyle = hitFlash > 0 ? '#ff8a8a' : '#d83a4a';
+    roundRect(10, BASE_Y, W - 20, BASE_H, 14);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = '700 28px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(baseHP + ' HP', W / 2, BASE_Y + BASE_H / 2 - 6);
+    // HP bar
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(30, BASE_Y + BASE_H - 14, W - 60, 6);
+    ctx.fillStyle = '#7dff9a';
+    ctx.fillRect(30, BASE_Y + BASE_H - 14, (W - 60) * (baseHP / BASE_MAX_HP), 6);
+
+    // Gates
+    ctx.font = '800 22px system-ui, sans-serif';
+    for (var gi = 0; gi < GATE_COUNT; gi++) {
+      var g = GATES[gi], f = gateFlash[gi];
+      var isMul = g.type === 'x';
+      ctx.fillStyle = isMul ? 'rgba(60,160,255,' + (0.35 + f * 0.4) + ')' : 'rgba(90,230,140,' + (0.35 + f * 0.4) + ')';
+      roundRect(g.x, g.y - g.h / 2, g.w, g.h, 8);
+      ctx.fill();
+      ctx.strokeStyle = isMul ? '#4db3ff' : '#6dffa6';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.fillText(g.label, g.x + g.w / 2, g.y + 1);
+    }
+
+    // Mobs: one batched path, one fill
+    ctx.fillStyle = '#4db3ff';
+    ctx.beginPath();
+    for (var i = 0; i < mobCount; i++) {
+      ctx.moveTo(mx[i] + MOB_R, my[i]);
+      ctx.arc(mx[i], my[i], MOB_R, 0, 6.2832);
+    }
+    ctx.fill();
+
+    // Cannon
+    ctx.fillStyle = '#2b3a6b';
+    roundRect(cannonX - 9, CANNON_Y - 26, 18, 30, 5);
+    ctx.fill();
+    ctx.fillStyle = '#4db3ff';
+    ctx.beginPath();
+    ctx.arc(cannonX, CANNON_Y + 6, 20, 0, 6.2832);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(cannonX, CANNON_Y + 6, 7, 0, 6.2832);
+    ctx.fill();
+  }
+
+  // ---------- Main loop ----------
+  var last = 0;
+  function frame(t) {
+    var dt = (t - last) / 1000;
+    last = t;
+    if (dt > MAX_DT) dt = MAX_DT;
+    if (dt > 0) update(dt);
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  // Pause on hidden tab (battery) by letting rAF stop naturally; just reset the timer on return.
+  document.addEventListener('visibilitychange', function () { last = performance.now(); });
+
+  // Test hook (read-only introspection for headless tests)
+  window.__mob = {
+    update: update, reset: reset,
+    get: function () { return { mobCount: mobCount, baseHP: baseHP, won: won, cap: MAX_MOBS }; },
+    setBaseHP: function (n) { baseHP = n; },
+    aim: function (x) { targetX = x; cannonX = x; }
+  };
+
+  resize();
+  reset();
+  requestAnimationFrame(function (t) { last = t; requestAnimationFrame(frame); });
+})();
+</script>
+</body>
+</html>
