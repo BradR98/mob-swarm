@@ -107,3 +107,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Boss rebalance: waves 3-12 reds (0.35 x 0.4 of level wave), interval 16-24 s, pipe 7 reds/s (level pipe 14/s).
 - Sim (idealised bot that never shoots reds, N=20, full fight): L10 20/20, L20 18/20 (was 2/10 and 1/10 before tuning). Pure boss TTK is 57 s (L10) / 86 s (L20) vs the 45 s target - not recalibrated.
 - Headless: 131 PASS / 0 FAIL (trackpad boundary, render arcs, scale, boss pacing, input checks).
+
+## Phase 10 - Negative-space terrain, true lanes, swarm density, pause (v10 / cache c9)
+- Terrain rewritten: massive edge-hugging blocks carve continuous lanes. Layouts: Bridge (80px neck), Fork (central island), S-Curve (interlocking peninsulas) + edge rails. Placed in the free band above the gates (or below them when 4+ gates). Bumpers/holes keep clear of lanes.
+- Gate slots moved up 26px (354..164) to give the lower band room for a lane layout.
+- A bridge ramp must not be a single thick slab: it poked into the opposite ramp and trapped 1500 blues in a crevice (found by sim, L6 TTK 300s). Ramps are now a thin slab + stacked strips.
+- Reds no longer track the blue mass; each random-walks sideways (Brownian drift, 55px/s cap). Sloped faces: reds slide downstream, blues upstream.
+- Swarm: red pool 500 -> 1000, MAX_WAVE 300, pipe 14 -> 28/s, boss pipe 7 -> 14/s, Basic hp 2 -> 1, Tank 5 -> 3.
+- Pause button (top right, left of mute): freezes the rAF loop (cancelAnimationFrame), PAUSED overlay with Resume; also auto-pauses when the tab is hidden.
+- Throughput derate per layout (bridge 0.9, fork 0.8, s-curve 0.75; x0.75 on bosses) from bot-sim.
+- Headless: 137 PASS / 0 FAIL, incl. independent 2px BFS proving a >=60px path exists on levels 1-150, row scan min open span 80px, bridge neck 80px.

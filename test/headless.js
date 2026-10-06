@@ -70,7 +70,7 @@ ok(JSON.stringify(gl(37)) === JSON.stringify(gl(37)) && JSON.stringify(gl(37)) !
       else if (d[5] === up[5]) oppOK = false;
     });
     for (let q = 1; q < L.gates.length; q++) if (L.gates[q][1] > L.gates[q - 1][1]) layoutOK = false;
-    if (L.waveMax > g.MAX_WAVE || 2 * L.waveMax > 500 || L.waveMin > L.waveMax) waveOK = false;
+    if (L.waveMax > g.MAX_WAVE || 2 * L.waveMax > g.get().capRed || L.waveMin > L.waveMax) waveOK = false;
     if (L.redInterval > prevInt + 1e-9) intervalOK = false; prevInt = L.redInterval;
     L.bumpers.forEach(b => L.gates.forEach(d => { if (Math.abs(b[1] - d[1]) < 13 + b[2]) boundsOK = false; }));
   }
@@ -78,7 +78,7 @@ ok(JSON.stringify(gl(37)) === JSON.stringify(gl(37)) && JSON.stringify(gl(37)) !
   ok(bossOK, 'bosses only on multiples of 10 (HP from throughput * 45)');
   ok(oppOK, 'negative gates always slide opposite the high-reward gate they guard');
   ok(layoutOK, 'risk vs reward: x3/+10 narrow (<=63px) and high, x2/+2 wide (>=74px) and low, negatives wide and directly below a high gate');
-  ok(waveOK, 'wave sizes capped at ' + g.MAX_WAVE + ' (two walls always fit the 500 pool) for levels 1-150');
+  ok(waveOK, 'wave sizes capped at ' + g.MAX_WAVE + ' (two walls always fit the 1000 pool) for levels 1-150');
   ok(intervalOK && gl(6).redInterval < gl(1).redInterval && gl(40).redInterval < gl(20).redInterval && gl(1).redInterval === gl(5).redInterval, 'red spawn interval shrinks per tier and is constant within a tier');
   ok(boundsOK, 'bumpers never overlap gate rows');
   ok(gl(2).waveMin === gl(1).waveMin && gl(2).waveMax === gl(5).waveMax && gl(1).waveMin === 8 && gl(1).waveMax === 12 && gl(6).waveMin === 13 && gl(6).waveMax === 22,
@@ -124,19 +124,19 @@ ok(g.get().mobCount === 10, '/2 gate halves the stream exactly (20 -> ' + g.get(
 // ---------- Red shield / collisions ----------
 lvl(1);
 g.spawnBlue(100, 320, 0, -250, 0);
-g.spawnRed(100, 300);
+g.spawnRed(100, 300, 1);
 step(g, 6);
-ok(g.get().mobCount === 0 && g.get().redCount === 1 && g.get().redHP[0] === 1, 'first blue only wounds the red (hp 2 -> ' + g.get().redHP[0] + ', red alive)');
-g.spawnBlue(100, 380, 0, -250, 0);
-step(g, 20);
-ok(g.get().mobCount === 0 && g.get().redCount === 0, 'second blue destroys it (' + g.get().mobCount + '/' + g.get().redCount + ')');
+ok(g.get().mobCount === 0 && g.get().redCount === 1 && g.get().redHP[0] === 2, 'first blue only wounds a Tank (hp 3 -> ' + g.get().redHP[0] + ', red alive)');
+g.spawnBlue(100, 380, 0, -250, 0); g.spawnBlue(100, 410, 0, -250, 0);
+step(g, 30);
+ok(g.get().mobCount === 0 && g.get().redCount === 0, 'third blue destroys it (' + g.get().mobCount + '/' + g.get().redCount + ')');
 
 lvl(1);
 for (let i = 0; i < 10; i++) g.spawnRed(40 + i * 28, 300);
 for (let i = 0; i < 30; i++) g.spawnBlue(40 + (i % 10) * 28, 330 + ((i / 10) | 0) * 40, 0, -250, 0);
 step(g, 30);
 { const s6 = g.get();
-  ok(s6.redCount === 0 && s6.mobCount === 10, 'mass collision: 10 reds cost 20 blues (blue ' + s6.mobCount + ', red ' + s6.redCount + ')'); }
+  ok(s6.redCount === 0 && s6.mobCount === 20, 'mass collision: 10 reds cost 10 blues (blue ' + s6.mobCount + ', red ' + s6.redCount + ')'); }
 
 // ---------- Cannon shield ----------
 lvl(1);
@@ -164,11 +164,13 @@ for (const n of [1, 25, 61]) {
   ok(Math.abs(mean(xs) - px) < 12 && Math.max(...xs) - Math.min(...xs) < 45, 'L' + n + ' reds leave ONE concentrated pipe at x=' + px.toFixed(0) + ' (mean ' + mean(xs).toFixed(0) + ', width ' + (Math.max(...xs) - Math.min(...xs)).toFixed(0) + 'px)');
 }
 ok(gl(1).pipeX === 180 && [...Array(100).keys()].every(i => { const x = gl(i + 2).pipeX; return x >= 80 && x <= 280; }), 'pipe x: L1 centred, later levels vary within 80..280');
-lvl(1);
-g.spawnRed(100, 200);
-for (let i = 0; i < 6; i++) g.spawnBlue(280, 480, 0, 0, 0);
-step(g, 40);
-ok(g.get().redX[0] - 100 > 10, 'red drifts toward blue mass (+' + (g.get().redX[0] - 100).toFixed(1) + 'px)');
+// Brownian reds: they never track the blue mass; they random-walk sideways and spread across the lane
+lvl(1); g.setFlags({ fire: false, spawner: false });
+for (let i = 0; i < 60; i++) g.spawnRed(180, 150, 0);
+for (let i = 0; i < 6; i++) g.spawnBlue(330, 520, 0, 0, 0);
+step(g, 100);
+{ const q = g.get(), mean = q.redX.reduce((a, b) => a + b, 0) / q.redX.length, sd = Math.sqrt(q.redX.reduce((a, b) => a + (b - mean) * (b - mean), 0) / q.redX.length);
+  ok(q.redX.length > 40 && Math.abs(mean - 180) < 15 && sd > 6, 'reds ignore the blue mass (centroid ' + mean.toFixed(1) + ' vs 180) and spread by Brownian drift (sd ' + sd.toFixed(1) + 'px)'); }
 lvl(1);
 g.spawnRed(280, 200);
 g.spawnBlue(100, 440, 0, -1, 0);
@@ -278,15 +280,15 @@ ok(g.get().state === 1 && els.restart.textContent === 'Next Level', 'killing the
 
 // ---------- Bestiary ----------
 { const T = g.RedMobTypes;
-  ok(T.Basic.speed === 1 && T.Basic.hp === 2 && T.Tank.speed === 0.5 && T.Tank.radius === 1.5 && T.Tank.hp === 5 && T.Tank.color === '#8a1020' &&
-     T.Sprinter.speed === 1.5 && T.Sprinter.radius === 0.7 && T.Sprinter.hp === 1 && T.Sprinter.color === '#ff8a00', 'RedMobTypes: Basic 1x/2hp, Tank 0.5x/1.5r/5hp dark red, Sprinter 1.5x/0.7r/1hp orange');
+  ok(T.Basic.speed === 1 && T.Basic.hp === 1 && T.Tank.speed === 0.5 && T.Tank.radius === 1.5 && T.Tank.hp === 3 && T.Tank.color === '#8a1020' &&
+     T.Sprinter.speed === 1.5 && T.Sprinter.radius === 0.7 && T.Sprinter.hp === 1 && T.Sprinter.color === '#ff8a00', 'RedMobTypes: Basic 1x/1hp, Tank 0.5x/1.5r/3hp dark red, Sprinter 1.5x/0.7r/1hp orange');
   const move = type => { lvl(1); g.spawnRed(180, 200, type); step(g, 30); return g.get().redY[0] - 200; };
   const mb = move(0), mt = move(1), ms = move(2);
   ok(Math.abs(mt / mb - 0.5) < 0.05 && Math.abs(ms / mb - 1.5) < 0.05, 'Tank moves at 0.5x and Sprinter at 1.5x Basic speed (' + mb.toFixed(0) + '/' + mt.toFixed(0) + '/' + ms.toFixed(0) + 'px)');
   const hits = type => { lvl(1); g.spawnRed(180, 300, type); let h = 0; while (g.get().redCount > 0 && h < 20) { g.spawnBlue(180, g.get().redY[0] + 28, 0, -250, 0); step(g, 6); h++; } return h; };
-  ok(hits(0) === 2 && hits(1) === 5 && hits(2) === 1, 'blues needed: Basic 2, Tank 5, Sprinter 1 (' + hits(0) + '/' + hits(1) + '/' + hits(2) + ')');
+  ok(hits(0) === 1 && hits(1) === 3 && hits(2) === 1, 'blues needed: Basic 1, Tank 3, Sprinter 1 (' + hits(0) + '/' + hits(1) + '/' + hits(2) + ')');
   lvl(1); g.spawnRed(100, 300, 1); g.spawnRed(180, 300, 2); g.spawnBlue(100 + 10, 300, 0, 0, 0); g.spawnBlue(180 + 10, 308, 0, 0, 0); step(g, 1);
-  ok(g.get().redHP[0] === 4 && g.get().redHP[1] === 1, 'Tank (r=10.5) is hit from further away than a Sprinter (r=4.9)');
+  ok(g.get().redHP[0] === 2 && g.get().redHP[1] === 1, 'Tank (r=10.5) is hit from further away than a Sprinter (r=4.9)');
   const seen = n => { const t = new Set(); for (let k = 0; k < 30; k++) { g.setLevel(n); g.setFlags({ fire: false, spawner: true }); g.setGates([]); g.setObstacles({}); g.touch(false);
     let gd = 0; while (g.get().redCount === 0 && gd++ < 1200) g.update(1 / 60); g.get().redType.forEach(x => t.add(x)); } return [...t].sort().join(''); };
   ok(seen(3) === '0' && seen(8) === '01' && seen(18) === '012', 'waves contain only unlocked types: T1 {Basic}, T2 {+Tank}, T4 {+Sprinter} (' + seen(3) + '/' + seen(8) + '/' + seen(18) + ')');
@@ -296,11 +298,11 @@ ok(g.get().state === 1 && els.restart.textContent === 'Next Level', 'killing the
 { const A = g.Armory.standard;
   ok(A.fireRate === 111 && A.bulletVelocity === 250 && A.piercing === 1, 'Armory.standard: 111ms, 250px/s, piercing 1');
   g.equip('piercer'); lvl(1); g.spawnRed(180, 300, 0); g.spawnBlue(180, 330, 0, -250, 0); step(g, 6);
-  ok(g.get().redCount === 0 && g.get().mobCount === 0, 'piercing 2: one blue subtracts both HP of a Basic red and dies');
+  ok(g.get().redCount === 0, 'piercing 2: one blue kills a 1hp Basic red and keeps its spare point');
   lvl(1); g.spawnRed(180, 300, 1); g.spawnBlue(180, 330, 0, -250, 0); step(g, 6);
-  ok(g.get().redCount === 1 && g.get().redHP[0] === 3 && g.get().mobCount === 0, 'piercing 2 vs Tank: 5 -> 3 HP, blue spent');
-  g.equip('standard'); lvl(1); g.spawnRed(180, 300, 0); g.spawnBlue(180, 330, 0, -250, 0); step(g, 6);
-  ok(g.get().redHP[0] === 1 && g.get().mobCount === 0, 'standard piercing 1: one blue only subtracts 1 HP');
+  ok(g.get().redCount === 1 && g.get().redHP[0] === 1 && g.get().mobCount === 0, 'piercing 2 vs Tank: 3 -> 1 HP, blue spent');
+  g.equip('standard'); lvl(1); g.spawnRed(180, 300, 1); g.spawnBlue(180, 330, 0, -250, 0); step(g, 6);
+  ok(g.get().redHP[0] === 2 && g.get().mobCount === 0, 'standard piercing 1: one blue only subtracts 1 HP');
   g.equip('rapid'); lvl(1); g.setFlags({ fire: true, spawner: false }); g.touch(true); step(g, 60);
   { const n = g.get().mobCount; ok(n >= 11 && n <= 14, 'Armory.rapid (80ms) fires ~12.5 shots/s (' + n + ' in 1s)'); }
   g.touch(false); g.equip('standard');
@@ -351,22 +353,43 @@ const inside = (x, y, T) => { const c = Math.cos(T[4]), sn = Math.sin(T[4]), dx 
   g.touch(false);
   ok(bad === 0, 'soak on generated terrain: no mob centre ever inside a slab (' + checks + ' samples)');
 }
-{ // generated layouts
-  let withT = 0, geomOK = true, clearOK = true, cap = 0, why = '';
+{ // generated layouts (Phase 10: negative-space lanes)
+  let withT = 0, geomOK = true, clearOK = true, cap = 0, why = '', rowsOK = true;
+  const inObb = (t, x, y) => { const c = Math.cos(t[4]), sn = Math.sin(t[4]), dx = x - t[0], dy = y - t[1];
+    return Math.abs(dx * c + dy * sn) <= t[2] && Math.abs(-dx * sn + dy * c) <= t[3]; };
   for (let n = 2; n <= 150; n++) {
-    const L = gl(n); if (L.terrain.length) withT++; if (L.terrain.length > 8) cap++;
+    const L = gl(n); if (L.terrain.length) withT++; if (L.terrain.length > 40) cap++;
     for (const t of L.terrain) {
-      const ey = t[2] * Math.abs(Math.sin(t[4])) + t[3] * Math.abs(Math.cos(t[4])), ex = t[2] * Math.abs(Math.cos(t[4])) + t[3] * Math.abs(Math.sin(t[4]));
-      if (t[0] - ex < 0 || t[0] + ex > 360 || t[1] - ey < 128 || t[1] + ey > 545) { geomOK = false; why = 'bounds ' + n; }
-      for (const d of L.gates) if (t[1] + ey > d[1] - 13 && t[1] - ey < d[1] + 13) { geomOK = false; why = 'gate row ' + n; }
+      const ey = t[2] * Math.abs(Math.sin(t[4])) + t[3] * Math.abs(Math.cos(t[4]));
+      if (t[1] - ey < 120 || t[1] + ey > 500) { geomOK = false; why = 'bounds ' + n; }
       for (const b of L.bumpers) { const c = Math.cos(t[4]), sn = Math.sin(t[4]), dx = b[0] - t[0], dy = b[1] - t[1], lx = dx * c + dy * sn, ly = -dx * sn + dy * c;
         const ex2 = Math.max(Math.abs(lx) - t[2], 0), ey2 = Math.max(Math.abs(ly) - t[3], 0); if (ex2 * ex2 + ey2 * ey2 < b[2] * b[2]) clearOK = false; }
     }
+    for (const d of L.gates) for (let y = d[1] - 13; y <= d[1] + 13; y += 3) for (let x = 11; x <= 349; x += 3) if (L.terrain.some(t => inObb(t, x, y))) { rowsOK = false; why = 'gate row ' + n; }
   }
-  ok(gl(1).terrain.length === 0 && withT >= 140 && cap === 0, 'terrain: none on L1, present on ' + withT + '/149 later levels, max 8 pieces');
-  ok(geomOK && clearOK, 'terrain stays inside the field, clear of gate rows and bumpers ' + why);
-  const kinds = new Set(); for (let n = 2; n <= 60; n++) kinds.add(gl(n).terrain.length + ':' + gl(n).terrain.map(t => Math.abs(t[4]) < 1e-9 ? 'h' : 'a').join(''));
-  ok(kinds.size >= 4, 'layout variety (pillars / funnels / zig-zags): ' + kinds.size + ' distinct shapes');
+  ok(gl(1).terrain.length === 0 && withT >= 140 && cap === 0, 'terrain: none on L1, present on ' + withT + '/149 later levels, max 40 pieces');
+  ok(geomOK && clearOK && rowsOK, 'terrain stays between base and muzzle, gate rows stay fully open (rails only at the edges), bumpers clear ' + why);
+  const kinds = {}; for (let n = 2; n <= 150; n++) for (const k of gl(n).terrainKinds) kinds[k] = (kinds[k] || 0) + 1;
+  ok(kinds.bridge > 5 && kinds.fork > 5 && kinds.scurve > 5, 'all three lane layouts occur: ' + JSON.stringify(kinds));
+  // Independent path check: >= 60px gap (2 x 30px radius disc) must connect the base to the muzzle on EVERY level
+  const pathOK = L => { const CELL = 2, y0 = 120, y1 = 504, cols = 181, rows = ((y1 - y0) / CELL | 0) + 1, free = new Uint8Array(cols * rows);
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { let f = 1; const x = c * CELL, y = y0 + r * CELL;
+      for (const t of L.terrain) { const cs = Math.cos(t[4]), sn = Math.sin(t[4]), dx = x - t[0], dy = y - t[1], lx = dx * cs + dy * sn, ly = -dx * sn + dy * cs;
+        const ex = Math.max(Math.abs(lx) - t[2], 0), ey = Math.max(Math.abs(ly) - t[3], 0); if (ex * ex + ey * ey < 900) { f = 0; break; } }
+      free[r * cols + c] = f; }
+    const seen = new Uint8Array(cols * rows), q = []; for (let c = 0; c < cols; c++) if (free[c]) { seen[c] = 1; q.push(c); }
+    for (let h = 0; h < q.length; h++) { const cur = q[h], px = cur % cols, py = (cur / cols) | 0; if (py === rows - 1) return true;
+      for (const [ax, ay] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const nx = px + ax, ny = py + ay; if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue; const i = ny * cols + nx; if (!seen[i] && free[i]) { seen[i] = 1; q.push(i); } } }
+    return false; };
+  let pathBad = '', worst = 0; for (let n = 1; n <= 150; n++) if (!pathOK(gl(n))) pathBad += n + ' ';
+  ok(pathBad === '', 'terrain never pinches off a lane: a >=60px path exists top-to-bottom on levels 1-150 ' + pathBad);
+  // Row scan: the widest open span on every row (the "river" width) never drops below 60px; bridge necks are exactly 80px
+  const widest = (L, y) => { let best = 0, run = 0; for (let x = 0; x <= 360; x++) { const hit = L.terrain.some(t => inObb(t, x, y)); if (hit) run = 0; else { run++; if (run > best) best = run; } } return best; };
+  let minAll = 1e9, minBridge = 1e9, bridges = 0;
+  for (let n = 2; n <= 150; n++) { const L = gl(n); let mn = 1e9; for (let y = 124; y <= 496; y += 2) mn = Math.min(mn, widest(L, y));
+    minAll = Math.min(minAll, mn); if (L.terrainKinds.includes('bridge')) { bridges++; minBridge = Math.min(minBridge, mn); } }
+  ok(minAll >= 60, 'every row of every level keeps an open span >= 60px (min ' + minAll + 'px)');
+  ok(bridges > 5 && minBridge >= 78 && minBridge <= 83, 'Bridge necks pinch to ~80px (' + minBridge + 'px over ' + bridges + ' bridge levels)');
 }
 
 // ---------- Speed cap & crowding ----------
@@ -416,7 +439,7 @@ const inside = (x, y, T) => { const c = Math.cos(T[4]), sn = Math.sin(T[4]), dx 
   lvl(1); g.spawnPill(180, 480, 1); g.aim(180); step(g, 50);
   ok(g.get().powerName === 'piercingRounds', 'second pill type equips Piercing Rounds');
   g.spawnRed(180, 300, 1); g.setFlags({ fire: false, spawner: false }); g.spawnBlue(180, 330, 0, -250, 0); step(g, 6);
-  ok(g.get().redHP[0] === 2, 'Piercing Rounds subtract 3 HP per blue (Tank 5 -> ' + g.get().redHP[0] + ')');
+  ok(g.get().redCount === 0, 'Piercing Rounds subtract 3 HP per blue (Tank 3 -> dead)');
   g.equip('piercer'); lvl(1); g.spawnPill(180, 480, 0); g.aim(180); step(g, 50); g.setFlags({ fire: false, spawner: false }); step(g, 60 * 9); g.equip('standard');
   ok(g.get().powerName === '', 'power-up expiry returns to the equipped base weapon');
   lvl(1); g.setFlags({ fire: false, spawner: true }); g.spawnCrate(); const hpBefore = g.get().cannonHP;
@@ -498,4 +521,12 @@ for (let i = 0; i < 1500; i++) g.spawnBlue(10 + (i % 50) * 6.8, 300 + ((i / 50) 
   const pe = [], fake = { clientX: 5, clientY: 620, pointerId: 1, pointerType: 'touch', preventDefault() {} };
   ok(/function pointerToLogicalX\(e\)\s*\{[^}]*clientX[^}]*\}/.test(src) && !/pointerToLogicalX[^}]*clientY/.test(src.match(/function pointerToLogicalX[\s\S]*?\n  \}/)[0]) && /canvas\.addEventListener\('pointerdown'/.test(src), 'touch input maps from clientX only, on the full canvas (works anywhere in the trackpad zone)');
 }
+// Phase 10: pause
+{ lvl(1); g.setFlags({ fire: false, spawner: false }); g.spawnRed(180, 200, 0); step(g, 5);
+  const y0 = g.get().redY[0]; g.setPaused(true); step(g, 30);
+  ok(g.isPaused() && g.get().redY[0] === y0 && els.overlayTitle.textContent === 'PAUSED' && els.restart.textContent === 'Resume', 'pause freezes the simulation and shows the PAUSED overlay with a Resume button');
+  g.setPaused(false); step(g, 30);
+  ok(!g.isPaused() && g.get().redY[0] > y0, 'resume continues the simulation');
+  g.setPaused(true); g.setPaused(false); lvl(1); g.get();
+  ok(/id="pause"/.test(html) && /#pause \{[^}]*top: 8px; right: 54px/.test(html), 'pause button sits in the top-right corner (clear of the trackpad zone)'); }
 process.exit(fail ? 1 : 0);

@@ -46,3 +46,6 @@ Still unverified on a real device (touch, audio, FPS, PWA install). Supply-crate
 
 ## Phase 9 status
 Trackpad zone, crescent cannon, 0.82 entity scale and boss rebalance done; headless 131/0; boss full-fight sim L10 20/20, L20 18/20 (bot ignores reds). Open: boss pure TTK exceeds 45 s target (57 s/86 s), base-level TTK not re-simmed after scaling. Needs real-device check: thumb ergonomics, crescent look, touch in zone, FPS.
+
+## Phase 10 status
+Lanes, Brownian reds, swarm density and pause done; headless 137/0. Bot sim (perfect aim, no reds): base TTK 17-41s vs 35-43s target (often fast), boss TTK L10 74s / L20 64s vs 45s target (still slow; terrain makes the hull harder to hit), boss full fights 10/10 (bot never shoots reds). Open: boss TTK, no real-device playtest (lane feel, 1000-red FPS, pause button reach).
