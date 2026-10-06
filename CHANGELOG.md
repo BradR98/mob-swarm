@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Phase 8 - terrain, fluid pathing, supply crates
+- **Terrain:** solid indestructible gray oriented rectangles (typed arrays, max 8). Circle-vs-OBB resolve pushes mobs out along the surface normal and strips only the velocity component into the wall, so blues and reds slide instead of bouncing. A minimum tangential slide speed (toward the nearer end of the slab) stops mobs stalling on flat faces.
+- **Layouts in `generateLevel`:** central pillars, angled funnels (56px mouth) and zig-zag baffles, placed in the free bands above and below the gate rows (none on L1). Crowded boards drop overlapping bumpers rather than lose the terrain. HP derates 7% per piece.
+- **Red pipe:** waves are queued and metered out (14/s) from one concentrated pipe at the top (fixed x per level), or from the boss hull on boss levels. Replaces the wide wall spawns.
+- **Speed cap:** any red is capped at 280px/s and the per-tier speed multiplier is capped at 1.25x. Late tiers scale wave size and the Tank/Sprinter mix (Tank up to 45%, Sprinter up to 30%) instead.
+- **Crowding:** reds push each other apart (grid broadphase, 2 passes/frame) and re-resolve against terrain, so a dense stream piles up at a choke point and overflows sideways.
+- **Supply crate:** a 30 HP gray crate spawns every 15-20s, drifts down at 16px/s (sliding round terrain), absorbs blue impacts, and drops a pill when broken. Catching the pill equips Shotgun (3-way spread) or Piercing Rounds (3 HP per blue) for 8s via new Armory entries (`pellets`, `spreadVx`), then reverts to the equipped base weapon.
+- Pool throughput cap lowered 600 -> 250 hits/s (terrain lengthens blue lifetimes, so the pool saturates sooner). Funnels no longer seal the screen edges, zig-zag and funnel slabs carry a preferred slide direction (toward the gap or mouth), and the upper band never gets an inverted funnel (it used to shove the whole stream to the edges, away from the boss).
+- **Bot-sim:** `smartAim` now uses a debug `traceBlue` dry-run so the bot aims round terrain (the old lane-based bot stalled for 400s on many levels).
+
 ### Phase 7 - balance fixes and data-driven refactor
 - **Throughput model replaces raw MTM.** Raw MTM overestimates badly (bot-sim measured efficiency falling from ~0.9 at MTM 2 to ~0.1 at MTM 700), so a flat 0.35 cannot hold TTK. HP now uses `throughput = min(9 * 1.05 * MTM^0.7, 600)` (efficiency curve + 1,500-pool cap), derated 8% per bumper and 15% per black hole. Base HP = throughput * 35 * (1 + 2% per tier); Boss HP = throughput * 45.
 - **Fixed `calculateLevelMTM`:** a `+n` gate turns each mob into n+1, so it multiplies by (n+1); Phase 6 added n.

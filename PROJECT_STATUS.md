@@ -38,9 +38,8 @@ _Last updated: 2026-10-05_
 
 If model quota runs out, continue from the next unchecked item in [BACKLOG.md](BACKLOG.md). Commit small and often.
 
-## Phase 7 balance status
-Perfect-aim bot, no reds (`node test/bot-sim.js 3`): base TTK L1 32s, L6 29s, L11 47s, L16 32s, L26 48s, L36 36s, L49 60s, L51 26s (target 35-42s).
-Boss TTK: L10 37s, L20 49s, L30 62s, L50 73s (target 45s).
-Full fights with reds (boss-sim, 6 runs): L10 6/6, L20 4/6, L30 5/6, L50 0/6.
-Known gaps: spread grows from L26+ because gate layout, bumpers and holes affect real throughput more than the model captures (L50 has only MTM 12 plus obstacles). The bot never dodges or targets reds, so full-fight win rates are a lower bound for humans. Next: model bumper/hole position vs gate lanes, or normalise by per-level sim calibration table.
-Still unverified on a real device (touch, audio, FPS, PWA install).
+## Phase 8 balance status
+Terrain-aware perfect-aim bot, no reds (`node test/bot-sim.js 2`): base TTK L1 32s, L6 28s, L11 19s, L16 48s, L26 34s, L36 22s, L49 30s, L51 42s (target ~35-42s). Boss TTK (cal run after the final terrain fix): L10 42s, L30 35s, L40 38s, L60 41s, but L20 72s and L50 84s (target 45s).
+Full fights with red waves and crates active, bot never fights reds: L1 2/2, L6 2/2, L50 2/2 (base levels); boss levels are weak (boss-sim 3 runs, before the last funnel fix: L10 0/3, L20 0/3, L30 1/3, L50 1/3). Reds now arrive as one dense stream down a single lane; the bot does not target it, so these are a floor for humans, but boss full-fight balance needs a pass (smaller boss waves or a slower pipe rate).
+Known gaps: HP model is still a global fit; terrain (lane displacement) and obstacle layout cause +/-50% TTK spread. A launch-lane reachability check exists as a debug probe (`traceBlue`); every generated level has >=3 lanes reaching the base area.
+Still unverified on a real device (touch, audio, FPS, PWA install). Supply-crate pill catch and terrain feel need a real playtest.

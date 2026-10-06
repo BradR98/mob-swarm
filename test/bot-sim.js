@@ -10,14 +10,18 @@ sb.window.window = sb.window; vm.createContext(sb); vm.runInContext(src, sb); co
 // Predict a bouncing gate's left edge t seconds ahead.
 function predict(G, t) { const span = G.max - G.min; if (span <= 0) return G.x; let d = (G.x - G.min) + G.vx * t; const per = 2 * span; d = ((d % per) + per) % per; if (d > span) d = per - d; return G.min + d; }
 // Choose the lane that maximises the predicted multiplier product through all gates.
-function smartAim(q) {
+function smartAim(q) {                       // terrain-aware: traces where a shot launched at x really crosses each gate row
   let best = 180, bs = -1;
+  const ys = []; for (let gi = 0; gi < q.gateCount; gi++) ys.push(g.gates[gi].y);
+  const bossT = q.isBoss && q.bossActive; if (bossT) ys.push(132);      // also aim the stream at the boss hull
   for (let x = 20; x <= 340; x += 6) {
     let sc = 1;
+    const tr = g.traceBlue(x, ys);
     for (let gi = 0; gi < q.gateCount; gi++) {
-      const G = g.gates[gi], t = (566 - G.y) / g.Armory.standard.bulletVelocity, gx = predict(G, t);
-      if (x >= gx - 4 && x <= gx + G.w + 4) sc *= G.type === 'x' ? G.n : G.type === '+' ? G.n + 1 : G.type === '/' ? 0.5 : 0.6;
+      const G = g.gates[gi], gx = predict(G, tr.t[gi]), px = tr.x[gi];
+      if (px >= gx - 4 && px <= gx + G.w + 4) sc *= G.type === 'x' ? G.n : G.type === '+' ? G.n + 1 : G.type === '/' ? 0.5 : 0.6;
     }
+    if (bossT && Math.abs(tr.x[q.gateCount] - q.bossX) > 76) sc *= 0.05;
     sc -= Math.abs(x - 180) * 1e-4;
     if (sc > bs) { bs = sc; best = x; }
   }
