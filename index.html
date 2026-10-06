@@ -31,6 +31,7 @@
     text-shadow: 0 0 24px #3aa0ff, 0 0 48px #3aa0ff;
     animation: pop .5s cubic-bezier(.2,1.6,.4,1);
   }
+  #overlay.lose h1 { text-shadow: 0 0 24px #ff3b4e, 0 0 48px #ff3b4e; }
   #overlay button {
     font: inherit; font-size: 20px; font-weight: 700; color: #fff;
     padding: 14px 40px; border: 0; border-radius: 999px; cursor: pointer;
@@ -46,7 +47,7 @@
   <div id="stage">
     <canvas id="game"></canvas>
     <div id="overlay">
-      <h1>Victory!</h1>
+      <h1 id="overlayTitle">Victory!</h1>
       <button id="restart" type="button">Restart</button>
     </div>
   </div>
@@ -58,9 +59,11 @@
 
   // ---------- Config (logical portrait space) ----------
   var W = 360, H = 640;
-  var MAX_MOBS = 1500;           // hard pool capacity
-  var MOB_R = 4;
-  var MOB_SPEED = 250;           // px/s upward
+  var MAX_MOBS = 1500;           // blue pool capacity
+  var MAX_RED = 500;             // red pool capacity
+  var MOB_R = 4, RED_R = 7;
+  var MOB_SPEED = 250;           // px/s upward (blue)
+  var RED_SPEED = MOB_SPEED * 0.75;   // px/s downward (red)
   var FIRE_RATE = 9;             // shots/s
   var SPREAD = 14;               // px/s sideways jitter at fire
   var BASE_MAX_HP = 50;
@@ -68,47 +71,92 @@
   var BASE_BOTTOM = BASE_Y + BASE_H;
   var CANNON_Y = H - 56;
   var MAX_DT = 1 / 20;           // clamp huge frame gaps
+  var RED_INTERVAL = 1.4;        // avg seconds between red spawns
+  var HIT_R2 = (MOB_R + RED_R) * (MOB_R + RED_R);
+
+  var PLAYING = 0, WON = 1, LOST = 2;
 
   // Gates: type 'x' multiplies (adds n-1 clones), '+' adds n clones.
+  // They slide horizontally between [min, max] and bounce. Different y so they never overlap.
+  function makeGate(w, y, type, n, label, startRight, speed) {
+    var min = 10, max = W - 10 - w;
+    return {
+      w: w, y: y, h: 26, type: type, n: n, label: label,
+      min: min, max: max, speed: speed, startRight: startRight,
+      x: startRight ? max : min, vx: startRight ? -speed : speed
+    };
+  }
   var GATES = [
-    { x: 30,  w: 140, y: 340, h: 26, type: 'x', n: 2, label: 'x2' },
-    { x: 190, w: 140, y: 340, h: 26, type: '+', n: 5, label: '+5' }
+    makeGate(130, 360, 'x', 2, 'x2', false, 70),   // left -> right
+    makeGate(110, 280, '+', 5, '+5', true, 90)     // right -> left
   ];
   var GATE_COUNT = GATES.length;
 
-  // ---------- Mob pool: pre-allocated parallel typed arrays ----------
+  // ---------- Blue mob pool: pre-allocated parallel typed arrays ----------
   var mx = new Float32Array(MAX_MOBS);
   var my = new Float32Array(MAX_MOBS);
   var mvx = new Float32Array(MAX_MOBS);
   var mvy = new Float32Array(MAX_MOBS);
   var mmask = new Uint8Array(MAX_MOBS);   // bit i set => already passed gate i
-  var mobCount = 0;                       // active mobs are indices [0, mobCount)
+  var bdead = new Uint8Array(MAX_MOBS);   // marked during collisions, compacted afterwards
+  var mobCount = 0;                       // active blue are indices [0, mobCount)
 
   function spawnMob(x, y, vx, vy, mask) {
     if (mobCount >= MAX_MOBS) return false;     // pool exhausted: drop, never allocate
     var i = mobCount++;
-    mx[i] = x; my[i] = y; mvx[i] = vx; mvy[i] = vy; mmask[i] = mask;
+    mx[i] = x; my[i] = y; mvx[i] = vx; mvy[i] = vy; mmask[i] = mask; bdead[i] = 0;
     return true;
   }
   function killMob(i) {                         // swap-remove with last active
     var l = --mobCount;
     if (i !== l) {
-      mx[i] = mx[l]; my[i] = my[l]; mvx[i] = mvx[l]; mvy[i] = mvy[l]; mmask[i] = mmask[l];
+      mx[i] = mx[l]; my[i] = my[l]; mvx[i] = mvx[l]; mvy[i] = mvy[l]; mmask[i] = mmask[l]; bdead[i] = 0;
     }
   }
 
+  // ---------- Red mob pool ----------
+  var rx = new Float32Array(MAX_RED);
+  var ry = new Float32Array(MAX_RED);
+  var rdead = new Uint8Array(MAX_RED);
+  var redCount = 0;
+  function spawnRed(x, y) {
+    if (redCount >= MAX_RED) return false;
+    var i = redCount++;
+    rx[i] = x; ry[i] = y; rdead[i] = 0;
+    return true;
+  }
+
+  // ---------- Spatial grid for blue-vs-red (linked lists in typed arrays, zero allocation) ----------
+  var CELL = 16, COLS = Math.ceil(W / CELL), ROWS = Math.ceil(H / CELL);
+  var gridHead = new Int16Array(COLS * ROWS);
+  var gridNext = new Int16Array(MAX_MOBS);
+  function cellX(x) { var c = (x / CELL) | 0; return c < 0 ? 0 : (c >= COLS ? COLS - 1 : c); }
+  function cellY(y) { var c = (y / CELL) | 0; return c < 0 ? 0 : (c >= ROWS ? ROWS - 1 : c); }
+
+  // ---------- Pop effects: fixed ring buffer ----------
+  var POP_MAX = 48;
+  var popX = new Float32Array(POP_MAX), popY = new Float32Array(POP_MAX), popLife = new Float32Array(POP_MAX);
+  var popHead = 0;
+  function spawnPop(x, y) {
+    popX[popHead] = x; popY[popHead] = y; popLife[popHead] = 1;
+    popHead = (popHead + 1) % POP_MAX;
+  }
+
   // ---------- State ----------
+  var state = PLAYING;
   var baseHP = BASE_MAX_HP;
-  var won = false;
   var cannonX = W / 2, targetX = W / 2;
   var fireAcc = 0;
+  var redTimer = 1.5;
   var hitFlash = 0;
   var gateFlash = new Float32Array(GATE_COUNT);
+  var autoFire = true, spawnerOn = true;   // toggled only by debug hooks
 
   var canvas = document.getElementById('game');
   var ctx = canvas.getContext('2d', { alpha: false });
   var stage = document.getElementById('stage');
   var overlay = document.getElementById('overlay');
+  var overlayTitle = document.getElementById('overlayTitle');
   var restartBtn = document.getElementById('restart');
   var scale = 1;
 
@@ -152,66 +200,104 @@
 
   // ---------- Game logic ----------
   function reset() {
-    mobCount = 0;
+    mobCount = 0; redCount = 0;
     baseHP = BASE_MAX_HP;
-    won = false;
+    state = PLAYING;
     fireAcc = 0;
+    redTimer = 1.5;
     hitFlash = 0;
-    for (var g = 0; g < GATE_COUNT; g++) gateFlash[g] = 0;
-    overlay.classList.remove('show');
+    for (var p = 0; p < POP_MAX; p++) popLife[p] = 0;
+    for (var g = 0; g < GATE_COUNT; g++) {
+      var G = GATES[g];
+      gateFlash[g] = 0;
+      G.x = G.startRight ? G.max : G.min;
+      G.vx = G.startRight ? -G.speed : G.speed;
+    }
+    overlay.classList.remove('show', 'lose');
   }
 
-  function applyGate(g, gi, x, y) {
+  function endGame(newState) {
+    state = newState;
+    mobCount = 0; redCount = 0;
+    var won = newState === WON;
+    overlayTitle.textContent = won ? 'Victory!' : 'Defeat';
+    restartBtn.textContent = won ? 'Restart' : 'Try Again';
+    overlay.classList.toggle('lose', !won);
+    overlay.classList.add('show');
+  }
+  restartBtn.addEventListener('click', reset);
+  restartBtn.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+
+  // Spawn clones for gate `gi` triggered by blue mob `mobIdx` at (x, y).
+  function applyGate(mobIdx, gi, x, y) {
     var gate = GATES[gi];
     var extra = gate.type === 'x' ? gate.n - 1 : gate.n;
-    var bit = 1 << gi;
+    var mask = (1 << gi) | mmask[mobIdx];   // clones inherit every gate the parent has passed
     gateFlash[gi] = 1;
     for (var k = 0; k < extra; k++) {
-      // Outward scatter: alternate left/right with random magnitude
-      var dir = (k & 1) ? 1 : -1;
+      var dir = (k & 1) ? 1 : -1;           // alternate outward scatter
       var vx = dir * (30 + Math.random() * 70);
       var vy = -MOB_SPEED * (0.85 + Math.random() * 0.2);
-      if (!spawnMob(x + dir * 3, y - 2 - Math.random() * 6, vx, vy, bit | mmask[g])) break;
+      if (!spawnMob(x + dir * 3, y - 2 - Math.random() * 6, vx, vy, mask)) break;
     }
   }
 
   function update(dt) {
-    if (won) return;
+    if (state !== PLAYING) return;
+    var i, gi;
 
-    // Cannon eases toward target
-    cannonX += (targetX - cannonX) * Math.min(1, dt * 18);
-
-    // Continuous fire
-    fireAcc += dt * FIRE_RATE;
-    while (fireAcc >= 1) {
-      fireAcc -= 1;
-      spawnMob(cannonX, CANNON_Y - 18, (Math.random() - 0.5) * 2 * SPREAD, -MOB_SPEED, 0);
+    // Gates slide and bounce
+    for (gi = 0; gi < GATE_COUNT; gi++) {
+      var G = GATES[gi];
+      G.x += G.vx * dt;
+      if (G.x < G.min) { G.x = G.min; G.vx = Math.abs(G.vx); }
+      else if (G.x > G.max) { G.x = G.max; G.vx = -Math.abs(G.vx); }
     }
 
-    // Mobs: iterate with live mobCount (clones appended during loop are safe: they carry the gate bit)
-    var i = 0;
+    // Cannon eases toward target; continuous fire
+    cannonX += (targetX - cannonX) * Math.min(1, dt * 18);
+    if (autoFire) {
+      fireAcc += dt * FIRE_RATE;
+      while (fireAcc >= 1) {
+        fireAcc -= 1;
+        spawnMob(cannonX, CANNON_Y - 18, (Math.random() - 0.5) * 2 * SPREAD, -MOB_SPEED, 0);
+      }
+    }
+
+    // Opponent spawner: red mobs drop from the base
+    if (spawnerOn) {
+      redTimer -= dt;
+      if (redTimer <= 0) {
+        redTimer = RED_INTERVAL * (0.6 + Math.random() * 0.8);
+        spawnRed(30 + Math.random() * (W - 60), BASE_BOTTOM + RED_R + 1);
+      }
+    }
+
+    // Blue mobs: iterate with live mobCount (clones appended mid-loop carry inherited gate bits)
+    i = 0;
     while (i < mobCount) {
       var x = mx[i] + mvx[i] * dt;
       var y = my[i] + mvy[i] * dt;
       var vx = mvx[i];
+      var vy = mvy[i];
 
-      // Side walls, bounce
       if (x < MOB_R) { x = MOB_R; vx = -vx; }
       else if (x > W - MOB_R) { x = W - MOB_R; vx = -vx; }
-      // Scattered mobs bleed lateral speed
-      vx *= (1 - Math.min(1, dt * 2.5));
-      mvx[i] = vx;
-      mx[i] = x; my[i] = y;
+      vx *= (1 - Math.min(1, dt * 2.5));     // scatter bleeds off
+      mvx[i] = vx; mx[i] = x; my[i] = y;
 
-      // Gates: trigger once when crossing gate centerline upward
-      var m = mmask[i];
-      for (var gi = 0; gi < GATE_COUNT; gi++) {
-        var bit = 1 << gi;
-        if (m & bit) continue;
-        var gate = GATES[gi];
-        if (y <= gate.y) {
-          mmask[i] = (m |= bit);
-          if (x >= gate.x && x <= gate.x + gate.w) applyGate(i, gi, x, y);
+      // Gates: circle-vs-rect overlap while moving up; each gate fires at most once per mob
+      if (vy < 0) {
+        var m = mmask[i];
+        for (gi = 0; gi < GATE_COUNT; gi++) {
+          var bit = 1 << gi;
+          if (m & bit) continue;
+          var gt = GATES[gi], hh = gt.h * 0.5;
+          if (x + MOB_R >= gt.x && x - MOB_R <= gt.x + gt.w &&
+              y + MOB_R >= gt.y - hh && y - MOB_R <= gt.y + hh) {
+            mmask[i] = (m |= bit);
+            applyGate(i, gi, x, y);
+          }
         }
       }
 
@@ -220,7 +306,7 @@
         if (x >= 10 && x <= W - 10) {
           baseHP--; hitFlash = 1;
           killMob(i);
-          if (baseHP <= 0) { baseHP = 0; win(); return; }
+          if (baseHP <= 0) { baseHP = 0; endGame(WON); return; }
           continue;
         }
         if (y < -10) { killMob(i); continue; }
@@ -228,17 +314,72 @@
       i++;
     }
 
-    if (hitFlash > 0) hitFlash = Math.max(0, hitFlash - dt * 6);
-    for (var g = 0; g < GATE_COUNT; g++) if (gateFlash[g] > 0) gateFlash[g] = Math.max(0, gateFlash[g] - dt * 4);
-  }
+    // Red mobs advance downward
+    var rdy = RED_SPEED * dt;
+    for (i = 0; i < redCount; i++) ry[i] += rdy;
 
-  function win() {
-    won = true;
-    mobCount = 0;
-    overlay.classList.add('show');
+    // Blue-vs-red: bucket blues in the grid, each red tests its 3x3 neighbourhood.
+    // Kills are only flagged here; compaction happens after, so grid indices stay valid.
+    if (redCount > 0 && mobCount > 0) {
+      var c;
+      for (c = 0; c < gridHead.length; c++) gridHead[c] = -1;
+      for (i = 0; i < mobCount; i++) {
+        c = cellY(my[i]) * COLS + cellX(mx[i]);
+        gridNext[i] = gridHead[c];
+        gridHead[c] = i;
+      }
+      var killedBlue = 0, killedRed = 0;
+      for (var r = 0; r < redCount; r++) {
+        var cx = cellX(rx[r]), cy = cellY(ry[r]);
+        var x0 = cx > 0 ? cx - 1 : 0, x1 = cx < COLS - 1 ? cx + 1 : COLS - 1;
+        var y0 = cy > 0 ? cy - 1 : 0, y1 = cy < ROWS - 1 ? cy + 1 : ROWS - 1;
+        search:
+        for (var yy = y0; yy <= y1; yy++) {
+          for (var xx = x0; xx <= x1; xx++) {
+            for (var b = gridHead[yy * COLS + xx]; b !== -1; b = gridNext[b]) {
+              if (bdead[b]) continue;
+              var dx = mx[b] - rx[r], dy = my[b] - ry[r];
+              if (dx * dx + dy * dy <= HIT_R2) {
+                bdead[b] = 1; rdead[r] = 1; killedBlue++; killedRed++;
+                spawnPop((mx[b] + rx[r]) * 0.5, (my[b] + ry[r]) * 0.5);
+                break search;
+              }
+            }
+          }
+        }
+      }
+      if (killedBlue) {                      // compact blue pool
+        var w = 0;
+        for (i = 0; i < mobCount; i++) {
+          if (bdead[i]) continue;
+          if (w !== i) { mx[w] = mx[i]; my[w] = my[i]; mvx[w] = mvx[i]; mvy[w] = mvy[i]; mmask[w] = mmask[i]; }
+          bdead[w] = 0;
+          w++;
+        }
+        mobCount = w;
+      }
+      if (killedRed) {                       // compact red pool
+        var wr = 0;
+        for (i = 0; i < redCount; i++) {
+          if (rdead[i]) continue;
+          if (wr !== i) { rx[wr] = rx[i]; ry[wr] = ry[i]; }
+          rdead[wr] = 0;
+          wr++;
+        }
+        redCount = wr;
+      }
+    }
+
+    // Defeat: any red reaches the cannon line
+    for (i = 0; i < redCount; i++) {
+      if (ry[i] >= CANNON_Y) { endGame(LOST); return; }
+    }
+
+    // Effects decay
+    if (hitFlash > 0) hitFlash = Math.max(0, hitFlash - dt * 6);
+    for (gi = 0; gi < GATE_COUNT; gi++) if (gateFlash[gi] > 0) gateFlash[gi] = Math.max(0, gateFlash[gi] - dt * 4);
+    for (i = 0; i < POP_MAX; i++) if (popLife[i] > 0) popLife[i] -= dt * 4;
   }
-  restartBtn.addEventListener('click', reset);
-  restartBtn.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
 
   // ---------- Rendering ----------
   function roundRect(x, y, w, h, r) {
@@ -257,11 +398,14 @@
     ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = '#121a35';
     ctx.fillRect(10, BASE_BOTTOM, W - 20, H - BASE_BOTTOM);
-    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    // Danger line at the cannon
+    ctx.strokeStyle = 'rgba(255,70,90,0.35)';
     ctx.lineWidth = 1;
+    ctx.setLineDash([6, 6]);
     ctx.beginPath();
-    ctx.moveTo(W / 2, BASE_BOTTOM); ctx.lineTo(W / 2, H);
+    ctx.moveTo(10, CANNON_Y); ctx.lineTo(W - 10, CANNON_Y);
     ctx.stroke();
+    ctx.setLineDash([]);
 
     // Opponent base
     ctx.fillStyle = hitFlash > 0 ? '#ff8a8a' : '#d83a4a';
@@ -272,7 +416,6 @@
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(baseHP + ' HP', W / 2, BASE_Y + BASE_H / 2 - 6);
-    // HP bar
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
     ctx.fillRect(30, BASE_Y + BASE_H - 14, W - 60, 6);
     ctx.fillStyle = '#7dff9a';
@@ -293,14 +436,35 @@
       ctx.fillText(g.label, g.x + g.w / 2, g.y + 1);
     }
 
-    // Mobs: one batched path, one fill
+    // Blue mobs: one batched path, one fill
+    var i;
     ctx.fillStyle = '#4db3ff';
     ctx.beginPath();
-    for (var i = 0; i < mobCount; i++) {
+    for (i = 0; i < mobCount; i++) {
       ctx.moveTo(mx[i] + MOB_R, my[i]);
       ctx.arc(mx[i], my[i], MOB_R, 0, 6.2832);
     }
     ctx.fill();
+
+    // Red mobs: batched
+    ctx.fillStyle = '#ff4d5e';
+    ctx.beginPath();
+    for (i = 0; i < redCount; i++) {
+      ctx.moveTo(rx[i] + RED_R, ry[i]);
+      ctx.arc(rx[i], ry[i], RED_R, 0, 6.2832);
+    }
+    ctx.fill();
+
+    // Collision pops
+    ctx.lineWidth = 2;
+    for (i = 0; i < POP_MAX; i++) {
+      var life = popLife[i];
+      if (life <= 0) continue;
+      ctx.strokeStyle = 'rgba(255,255,255,' + life.toFixed(2) + ')';
+      ctx.beginPath();
+      ctx.arc(popX[i], popY[i], 4 + (1 - life) * 16, 0, 6.2832);
+      ctx.stroke();
+    }
 
     // Cannon
     ctx.fillStyle = '#2b3a6b';
@@ -326,17 +490,19 @@
     render();
     requestAnimationFrame(frame);
   }
-
-  // Pause on hidden tab (battery) by letting rAF stop naturally; just reset the timer on return.
   document.addEventListener('visibilitychange', function () { last = performance.now(); });
 
-  // Test hook (read-only introspection for headless tests)
-  window.__mob = {
-    update: update, reset: reset,
-    get: function () { return { mobCount: mobCount, baseHP: baseHP, won: won, cap: MAX_MOBS }; },
-    setBaseHP: function (n) { baseHP = n; },
-    aim: function (x) { targetX = x; cannonX = x; }
-  };
+  // Debug/test hooks: only exposed at index.html#debug
+  if (typeof location !== 'undefined' && location.hash === '#debug') {
+    window.__mob = {
+      update: update, reset: reset, gates: GATES,
+      get: function () { return { mobCount: mobCount, redCount: redCount, baseHP: baseHP, state: state, capBlue: MAX_MOBS, capRed: MAX_RED }; },
+      aim: function (x) { targetX = x; cannonX = x; },
+      spawnBlue: function (x, y, vx, vy, mask) { return spawnMob(x, y, vx, vy, mask || 0); },
+      spawnRed: spawnRed,
+      setFlags: function (f) { if ('fire' in f) autoFire = f.fire; if ('spawner' in f) spawnerOn = f.spawner; }
+    };
+  }
 
   resize();
   reset();

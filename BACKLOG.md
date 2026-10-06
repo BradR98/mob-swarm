@@ -18,15 +18,15 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done. Suggested model: **Sonnet** =
 |----|------|--------|-------|
 | P2-1 | Dynamic lane flow (mobs steer toward base along lanes) | [ ] | Sonnet |
 | P2-2 | Gate math variants (`+N`, `xN`, negative gates `-N`, `/N`) | [ ] | Sonnet |
-| P2-3 | Collision dynamics: Red vs Blue units (spatial hash grid) | [ ] | Pro (design), Sonnet |
-| P2-4 | Per-gate single-pass guard to prevent re-triggering | [ ] | Sonnet |
+| P2-3 | Collision dynamics: Red vs Blue units (spatial hash grid) | [x] | Pro (design), Sonnet |
+| P2-4 | Per-gate single-pass guard to prevent re-triggering | [x] | Sonnet |
 
 ## Phase 3: Opponent and Defense
 
 | ID | Task | Status | Model |
 |----|------|--------|-------|
-| P3-1 | Moving gates (oscillating / sliding) | [ ] | Sonnet |
-| P3-2 | Opponent AI spawner (red waves, adaptive rate) | [ ] | Pro |
+| P3-1 | Moving gates (oscillating / sliding) | [x] | Sonnet |
+| P3-2 | Opponent AI spawner (red waves, adaptive rate) | [~] basic fixed-rate spawner done | Pro |
 | P3-3 | Base defense mechanics (turrets, shields, player-base HP and loss state) | [ ] | Pro |
 
 ## Phase 4: Progression and Polish

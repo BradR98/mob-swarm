@@ -4,7 +4,7 @@ _Last updated: 2026-10-05_
 
 | Field | Value |
 |-------|-------|
-| **Current Phase** | Phase 1: Scaffolding (core loop delivered, pending device testing) |
+| **Current Phase** | Phase 2 core delivered (moving gates, red mobs, defeat); pending device testing |
 | **Active Focus** | Validate Phase 1 `index.html` on real phones; begin Phase 2 lane flow |
 | **Known Blockers** | None |
 
