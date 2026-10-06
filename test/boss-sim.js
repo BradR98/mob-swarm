@@ -16,7 +16,7 @@ function smartAim(q) {
   for (let x = 20; x <= 340; x += 6) {
     let sc = 1;
     for (let gi = 0; gi < q.gateCount; gi++) {
-      const G = g.gates[gi], t = (566 - G.y) / 250, gx = predict(G, t);
+      const G = g.gates[gi], t = (566 - G.y) / g.Armory.standard.bulletVelocity, gx = predict(G, t);
       if (x >= gx - 4 && x <= gx + G.w + 4) sc *= G.type === 'x' ? G.n : G.type === '+' ? G.n + 1 : G.type === '/' ? 0.5 : 0.6;
     }
     sc -= Math.abs(x - 180) * 1e-4;

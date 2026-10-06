@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Phase 7 - balance fixes and data-driven refactor
+- **Throughput model replaces raw MTM.** Raw MTM overestimates badly (bot-sim measured efficiency falling from ~0.9 at MTM 2 to ~0.1 at MTM 700), so a flat 0.35 cannot hold TTK. HP now uses `throughput = min(9 * 1.05 * MTM^0.7, 600)` (efficiency curve + 1,500-pool cap), derated 8% per bumper and 15% per black hole. Base HP = throughput * 35 * (1 + 2% per tier); Boss HP = throughput * 45.
+- **Fixed `calculateLevelMTM`:** a `+n` gate turns each mob into n+1, so it multiplies by (n+1); Phase 6 added n.
+- **Mothership boss:** hull is 40% of screen width (144px), drifts at ~22px/s at the base line, hull extends below the shielded base so blues actually reach it (previously the base absorbed them first). Waves are sparse: 5-14 reds every 4.5-6.9s.
+- **Spatial gate logic:** x3/+10 are narrow and high, x2/+2 wide and low, negatives wide and directly below a high gate, sliding opposite it. (`+5` replaced by `+2`.)
+- **Bestiary:** `RedMobTypes` (Basic, Tank, Sprinter) with typed-array per-type lookups; reds carry a type id through all pool operations.
+- **Armory:** `Armory` dictionary (`fireRate` ms, `bulletVelocity`, `piercing`) with standard / piercer / rapid presets; blues carry remaining pierce points.
+- **Tiers:** `generateLevel` groups 5 levels per tier. Spawn rate, wave size, speed and enemy mix are constant within a tier; gate layouts randomize per level. T1 Basics, T2 +Tanks, T3 +Negative gates, T4 +Sprinters. Bumpers (L31+) and black holes (L51+) unchanged.
+- HP scalar is now +2% per **tier** (was per level) so TTK stays near target.
+
 ### Phase 6
 - Added `calculateLevelMTM(gates)` (Max Theoretical Multiplier). Base HP = `9 * MTM * 35 * (1 + 0.02 * (level - 1))`. Boss HP = `9 * MTM * 45`.
 - Boss is now a hovering mothership at the base line. It strafes left/right and drops dense red waves aimed at the blue mass. It no longer marches down the lane.

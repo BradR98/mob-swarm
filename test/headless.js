@@ -34,18 +34,24 @@ const quiet = () => { g.setFlags({ fire: false, spawner: false }); g.setGates([]
 const lvl = n => { g.setLevel(n); quiet(); };
 
 // ---------- Generator ----------
-{ // Phase 6: HP derives from the Max Theoretical Multiplier
-  const mtm = gates => gl(0) && g.calculateLevelMTM(gates);
-  ok(mtm([[0,0,'x',2],[0,0,'+',5],[0,0,'x',3],[0,0,'-',10]]) === 21 && mtm([[0,0,'/',2]]) === 1, 'MTM = sequential product/sum of positive gates, negatives ignored (x2,+5,x3 -> 21)');
-  let hpOK = true;
-  for (let n = 1; n <= 150; n++) { const L = gl(n); if (L.baseHP !== Math.round(9 * L.mtm * 35 * (1 + 0.02 * (n - 1))) || L.mtm !== g.calculateLevelMTM(L.gates)) hpOK = false; }
-  ok(hpOK, 'Base HP = 9 * MTM * 35 * (1 + 2% per level) for levels 1-150');
-  ok(gl(1).baseHP === 9 * 2 * 35, 'L1 (single x2): 630 HP');
+{ // Phase 7: HP derives from MTM through the measured efficiency curve, capped by the pool
+  const mtm = gates => g.calculateLevelMTM(gates);
+  ok(mtm([[0,0,'x',2],[0,0,'+',5],[0,0,'x',3],[0,0,'-',10]]) === 36 && mtm([[0,0,'/',2]]) === 1, "MTM = sequential product (x2, +5 -> x6, x3 = 36), negatives ignored");
+  let hpOK = true, capOK = true;
+  for (let n = 1; n <= 150; n++) { const L = gl(n);
+    if (L.mtm !== g.calculateLevelMTM(L.gates)) hpOK = false;
+    if (L.baseHP !== Math.round(L.throughput * 35 * (1 + 0.02 * (L.tier - 1)))) hpOK = false;
+    if (L.isBoss && L.bossHP !== Math.round(L.throughput * 45)) hpOK = false;
+    if (L.throughput > 600 + 1e-9 || L.throughput <= 0) capOK = false; }
+  ok(hpOK, 'Base HP = throughput * 35 * (1 + 2% per tier); Boss HP = throughput * 45 (levels 1-150)');
+  ok(capOK && g.levelThroughput(1e9) === 600, 'throughput is capped by the blue pool limit (600 hits/s)');
+  ok(g.levelThroughput(2) / (9 * 2) > 0.8 && g.levelThroughput(40) / (9 * 40) < 0.5, 'efficiency falls with MTM (~0.9 at x2, <0.5 at x40)');
+  ok(gl(1).gates.length === 1 && gl(1).gates[0][4] === 'x2', 'L1 is a single wide x2 gate');
 }
 ok(JSON.stringify(gl(37)) === JSON.stringify(gl(37)) && JSON.stringify(gl(37)) !== JSON.stringify(gl(38)), 'levels are deterministic per level number');
 {
   const isNeg = t => t === '-' || t === '/';
-  let tierOK = true, bossOK = true, oppOK = true, waveOK = true, boundsOK = true, intervalOK = true, prevInt = 99, why = '';
+  let layoutOK = true, tierOK = true, bossOK = true, oppOK = true, waveOK = true, boundsOK = true, intervalOK = true, prevInt = 99, why = '';
   for (let n = 1; n <= 150; n++) {
     const L = gl(n), types = L.gates.map(d => d[2]);
     const mults = L.gates.filter(d => !isNeg(d[2]));
@@ -54,26 +60,32 @@ ok(JSON.stringify(gl(37)) === JSON.stringify(gl(37)) && JSON.stringify(gl(37)) !
     if (n >= 11 && n <= 30 && (!types.some(isNeg) || L.bumpers.length || L.holes.length)) { tierOK = false; why = 'tier2 ' + n; }
     if (n >= 31 && n <= 50 && (L.bumpers.length < 2 || L.holes.length)) { tierOK = false; why = 'tier3 ' + n; }
     if (n >= 51 && L.holes.length < 1) { tierOK = false; why = 'tier4 ' + n; }
-    if (n <= 10 && !L.gates.every(d => ['x2', 'x3', '+5', '+10'].includes(d[4]))) { tierOK = false; why = 'labels ' + n; }
-    if ((n % 10 === 0) !== L.isBoss || L.bossHP !== (L.isBoss ? 9 * L.mtm * 45 : 0)) { bossOK = false; why = 'boss ' + n; }
-    L.gates.forEach((d, i) => {                           // negative gates oppose the nearest multiplier
-      if (!isNeg(d[2])) return;
-      let best = -1, bd = 99;
-      L.gates.forEach((e, j) => { if (!isNeg(e[2]) && Math.abs(i - j) < bd) { bd = Math.abs(i - j); best = j; } });
-      if (d[5] === L.gates[best][5]) oppOK = false;
+    if (n <= 10 && !L.gates.every(d => ['x2', 'x3', '+2', '+10'].includes(d[4]))) { tierOK = false; why = 'labels ' + n; }
+    if ((n % 10 === 0) !== L.isBoss || L.bossHP !== (L.isBoss ? Math.round(L.throughput * 45) : 0)) { bossOK = false; why = 'boss ' + n; }
+    L.gates.forEach((d, i) => {                           // negative gates guard the next gate up and slide opposite it
+      if (!isNeg(d[2])) { if (d[2] === 'x' && d[3] === 3 || d[2] === '+' && d[3] === 10) { if (!(d[0] <= 75)) layoutOK = false; } else if (!(d[0] >= 95)) layoutOK = false; return; }
+      const up = L.gates[i + 1];
+      if (!up || isNeg(up[2]) || !(up[3] === 3 || up[3] === 10) || up[1] !== d[1] - 40 || d[0] < 100) layoutOK = false;
+      else if (d[5] === up[5]) oppOK = false;
     });
+    for (let q = 1; q < L.gates.length; q++) if (L.gates[q][1] > L.gates[q - 1][1]) layoutOK = false;
     if (L.waveMax > g.MAX_WAVE || 2 * L.waveMax > 500 || L.waveMin > L.waveMax) waveOK = false;
     if (L.redInterval > prevInt + 1e-9) intervalOK = false; prevInt = L.redInterval;
     L.bumpers.forEach(b => L.gates.forEach(d => { if (Math.abs(b[1] - d[1]) < 13 + b[2]) boundsOK = false; }));
   }
   ok(tierOK, 'obstacle tiers: 1-10 basic, 11-30 +negatives, 31-50 +bumpers, 51+ +black holes ' + why);
-  ok(bossOK, 'bosses only on multiples of 10, HP = 9 * MTM * 45');
-  ok(oppOK, 'negative gates always slide opposite the nearest multiplier gate');
+  ok(bossOK, 'bosses only on multiples of 10 (HP from throughput * 45)');
+  ok(oppOK, 'negative gates always slide opposite the high-reward gate they guard');
+  ok(layoutOK, 'risk vs reward: x3/+10 narrow (<=75px) and high, x2/+2 wide (>=95px) and low, negatives wide and directly below a high gate');
   ok(waveOK, 'wave sizes capped at ' + g.MAX_WAVE + ' (two walls always fit the 500 pool) for levels 1-150');
-  ok(intervalOK && gl(2).redInterval < gl(1).redInterval && gl(40).redInterval < gl(20).redInterval, 'red spawn interval shrinks every level (2%)');
+  ok(intervalOK && gl(6).redInterval < gl(1).redInterval && gl(40).redInterval < gl(20).redInterval && gl(1).redInterval === gl(5).redInterval, 'red spawn interval shrinks per tier and is constant within a tier');
   ok(boundsOK, 'bumpers never overlap gate rows');
-  ok(gl(2).waveMin === gl(1).waveMin + 1 && gl(2).waveMax === gl(1).waveMax + 2 && gl(1).waveMin === 8 && gl(1).waveMax === 12,
-    'waves grow +1 min / +2 max per level (L1 8-12 -> L2 9-14)');
+  ok(gl(2).waveMin === gl(1).waveMin && gl(2).waveMax === gl(5).waveMax && gl(1).waveMin === 8 && gl(1).waveMax === 12 && gl(6).waveMin === 13 && gl(6).waveMax === 22,
+    'waves are constant within a tier and grow per tier (T1 8-12, T2 13-22)');
+  ok(gl(1).mixTank === 0 && gl(1).mixSprinter === 0 && gl(5).mixTank === 0 && gl(6).mixTank > 0 && gl(6).mixSprinter === 0 && gl(15).mixSprinter === 0 && gl(16).mixSprinter > 0, 'Bestiary unlocks: T1 basics only, T2 +Tanks, T4 +Sprinters');
+  const lay = n => JSON.stringify(gl(n).gates.map(d => [d[2], d[3]]));
+  ok([1, 2, 3, 4, 5].map(lay).filter((v, i, a) => a.indexOf(v) === i).length >= 3, 'gate layouts randomize within a tier');
+  ok(gl(5).gates.every(d => d[2] !== '-' && d[2] !== '/') && gl(11).gates.some(d => d[2] === '-' || d[2] === '/'), 'negative gates appear from Tier 3 (L11)');
 }
 
 // ---------- Gates ----------
@@ -198,7 +210,7 @@ while (g.get().redCount === 0) g.update(1 / 60);
 { const spread = a => Math.max(...a) - Math.min(...a);
   const w0 = spread(g.get().redX);
   g.setFlags({ fire: false, spawner: false });
-  step(g, 90);
+  step(g, 45);
   const w1 = spread(g.get().redX);
   ok(g.get().redCount > 0 && w1 > w0 * 0.8, 'wall width preserved while marching (' + w0.toFixed(0) + ' -> ' + w1.toFixed(0) + 'px)'); }
 
@@ -233,18 +245,18 @@ ok(Math.abs(g.get().blueX[0] - 240) > 0.2 || Math.abs(g.get().blueY[0] - 300) > 
 // ---------- Boss (hovering mothership) ----------
 lvl(10); g.setFlags({ fire: false, spawner: true });
 guard = 0; while (!g.get().bossActive && guard++ < 60 * 10) g.update(1 / 60);
-ok(g.get().isBoss && g.get().bossActive && g.get().bossHP === 9 * gl(10).mtm * 45, 'L10 boss spawns with 9*MTM*45 = ' + g.get().bossHP + ' HP');
-ok(Math.abs(g.get().bossY - 86) < 1, 'boss hovers at the base line (y ' + g.get().bossY.toFixed(0) + ')');
+ok(g.get().isBoss && g.get().bossActive && g.get().bossHP === gl(10).bossHP, 'L10 boss spawns with throughput*45 = ' + g.get().bossHP + ' HP');
+ok(Math.abs(g.get().bossY - 100) < 1, 'boss hovers at the base line (y ' + g.get().bossY.toFixed(0) + ')');
 { let xmin = 1e9, xmax = -1e9, yDrift = 0, waves = 0, lastR = 0, peakWave = 0;
   g.setFlags({ fire: false, spawner: true });
   for (let i = 0; i < 60 * 40 && g.get().state === 0; i++) {
     g.update(1 / 60); const q = g.get();
-    xmin = Math.min(xmin, q.bossX); xmax = Math.max(xmax, q.bossX); yDrift = Math.max(yDrift, Math.abs(q.bossY - 86));
+    xmin = Math.min(xmin, q.bossX); xmax = Math.max(xmax, q.bossX); yDrift = Math.max(yDrift, Math.abs(q.bossY - 100));
     if (q.redCount > lastR + 5) { waves++; peakWave = Math.max(peakWave, q.redCount - lastR); } lastR = q.redCount;
     if (q.state !== 0) break;
   }
-  ok(xmax - xmin > 200 && yDrift < 1, 'boss strafes left/right (x ' + xmin.toFixed(0) + '..' + xmax.toFixed(0) + ') and never marches down');
-  ok(waves >= 1 && peakWave >= 10, 'boss fires dense red waves while strafing (' + waves + ' waves, biggest ' + peakWave + ')'); }
+  ok(xmax - xmin > 60 && yDrift < 1, 'boss slowly drifts left/right (x ' + xmin.toFixed(0) + '..' + xmax.toFixed(0) + ') and never marches down');
+  ok(waves >= 1 && peakWave >= 5 && peakWave <= 14, 'boss fires sparse (<=14) red waves while drifting (' + waves + ' waves, biggest ' + peakWave + ')'); }
 lvl(10); g.setFlags({ fire: false, spawner: true });
 guard = 0; while (!g.get().bossActive && guard++ < 60 * 10) g.update(1 / 60);
 step(g, 60 * 2);
@@ -260,10 +272,50 @@ step(g, 10);
 ok(g.get().baseHP === gl(10).baseHP && g.get().mobCount === 0, 'base is shielded on boss levels (HP stays ' + g.get().baseHP + ')');
 lvl(20); g.setFlags({ fire: false, spawner: true });
 guard = 0; while (!g.get().bossActive && guard++ < 60 * 10) g.update(1 / 60);
-ok(g.get().bossHP === 9 * gl(20).mtm * 45, 'L20 boss HP = 9*MTM*45 = ' + g.get().bossHP);
+ok(g.get().bossHP === gl(20).bossHP, 'L20 boss HP = throughput*45 = ' + g.get().bossHP);
 g.setFlags({ fire: false, spawner: false }); g.setBossHP(1);
 g.spawnBlue(g.get().bossX, g.get().bossY + 60, 0, -250, 0); step(g, 8);
 ok(g.get().state === 1 && els.restart.textContent === 'Next Level', 'killing the boss wins the level -> "Next Level"');
+
+{ // mothership is wide: ~40% of the screen
+  lvl(10); g.setFlags({ fire: false, spawner: true }); guard = 0; while (!g.get().bossActive && guard++ < 600) g.update(1 / 60);
+  g.setFlags({ fire: false, spawner: false });
+  const bx = g.get().bossX, hp0 = g.get().bossHP;
+  g.spawnBlue(bx + 65, g.get().bossY + 60, 0, -250, 0); step(g, 8);
+  ok(g.get().bossHP === hp0 - 1, 'boss hull is 144px wide: a hit 65px off-centre lands');
+  g.spawnBlue(bx + 100, g.get().bossY + 60, 0, -250, 0); step(g, 8);
+  ok(g.get().bossHP === hp0 - 1, 'a shot 100px off-centre misses the hull');
+}
+
+// ---------- Bestiary ----------
+{ const T = g.RedMobTypes;
+  ok(T.Basic.speed === 1 && T.Basic.hp === 2 && T.Tank.speed === 0.5 && T.Tank.radius === 1.5 && T.Tank.hp === 5 && T.Tank.color === '#8a1020' &&
+     T.Sprinter.speed === 1.5 && T.Sprinter.radius === 0.7 && T.Sprinter.hp === 1 && T.Sprinter.color === '#ff8a00', 'RedMobTypes: Basic 1x/2hp, Tank 0.5x/1.5r/5hp dark red, Sprinter 1.5x/0.7r/1hp orange');
+  const move = type => { lvl(1); g.spawnRed(180, 200, type); step(g, 30); return g.get().redY[0] - 200; };
+  const mb = move(0), mt = move(1), ms = move(2);
+  ok(Math.abs(mt / mb - 0.5) < 0.05 && Math.abs(ms / mb - 1.5) < 0.05, 'Tank moves at 0.5x and Sprinter at 1.5x Basic speed (' + mb.toFixed(0) + '/' + mt.toFixed(0) + '/' + ms.toFixed(0) + 'px)');
+  const hits = type => { lvl(1); g.spawnRed(180, 300, type); let h = 0; while (g.get().redCount > 0 && h < 20) { g.spawnBlue(180, 330, 0, -250, 0); step(g, 6); h++; } return h; };
+  ok(hits(0) === 2 && hits(1) === 5 && hits(2) === 1, 'blues needed: Basic 2, Tank 5, Sprinter 1 (' + hits(0) + '/' + hits(1) + '/' + hits(2) + ')');
+  lvl(1); g.spawnRed(100, 300, 1); g.spawnRed(180, 300, 2); g.spawnBlue(100 + 12, 300, 0, 0, 0); g.spawnBlue(180 + 10, 308, 0, 0, 0); step(g, 1);
+  ok(g.get().redHP[0] === 4 && g.get().redHP[1] === 1, 'Tank (r=10.5) is hit from further away than a Sprinter (r=4.9)');
+  const seen = n => { const t = new Set(); for (let k = 0; k < 30; k++) { g.setLevel(n); g.setFlags({ fire: false, spawner: true }); g.setGates([]); g.setObstacles({}); g.touch(false);
+    let gd = 0; while (g.get().redCount === 0 && gd++ < 1200) g.update(1 / 60); g.get().redType.forEach(x => t.add(x)); } return [...t].sort().join(''); };
+  ok(seen(3) === '0' && seen(8) === '01' && seen(18) === '012', 'waves contain only unlocked types: T1 {Basic}, T2 {+Tank}, T4 {+Sprinter} (' + seen(3) + '/' + seen(8) + '/' + seen(18) + ')');
+}
+
+// ---------- Armory ----------
+{ const A = g.Armory.standard;
+  ok(A.fireRate === 111 && A.bulletVelocity === 250 && A.piercing === 1, 'Armory.standard: 111ms, 250px/s, piercing 1');
+  g.equip('piercer'); lvl(1); g.spawnRed(180, 300, 0); g.spawnBlue(180, 330, 0, -250, 0); step(g, 6);
+  ok(g.get().redCount === 0 && g.get().mobCount === 0, 'piercing 2: one blue subtracts both HP of a Basic red and dies');
+  lvl(1); g.spawnRed(180, 300, 1); g.spawnBlue(180, 330, 0, -250, 0); step(g, 6);
+  ok(g.get().redCount === 1 && g.get().redHP[0] === 3 && g.get().mobCount === 0, 'piercing 2 vs Tank: 5 -> 3 HP, blue spent');
+  g.equip('standard'); lvl(1); g.spawnRed(180, 300, 0); g.spawnBlue(180, 330, 0, -250, 0); step(g, 6);
+  ok(g.get().redHP[0] === 1 && g.get().mobCount === 0, 'standard piercing 1: one blue only subtracts 1 HP');
+  g.equip('rapid'); lvl(1); g.setFlags({ fire: true, spawner: false }); g.touch(true); step(g, 60);
+  { const n = g.get().mobCount; ok(n >= 11 && n <= 14, 'Armory.rapid (80ms) fires ~12.5 shots/s (' + n + ' in 1s)'); }
+  g.touch(false); g.equip('standard');
+}
 
 // ---------- Progression ----------
 lvl(1); g.setFlags({ fire: true, spawner: false }); g.setBaseHP(30); g.aim(100); g.touch(true);

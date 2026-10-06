@@ -15,7 +15,7 @@ function smartAim(q) {
   for (let x = 20; x <= 340; x += 6) {
     let sc = 1;
     for (let gi = 0; gi < q.gateCount; gi++) {
-      const G = g.gates[gi], t = (566 - G.y) / 250, gx = predict(G, t);
+      const G = g.gates[gi], t = (566 - G.y) / g.Armory.standard.bulletVelocity, gx = predict(G, t);
       if (x >= gx - 4 && x <= gx + G.w + 4) sc *= G.type === 'x' ? G.n : G.type === '+' ? G.n + 1 : G.type === '/' ? 0.5 : 0.6;
     }
     sc -= Math.abs(x - 180) * 1e-4;
@@ -45,15 +45,15 @@ function playPure(n) {            // no red waves; boss levels get the boss spaw
 }
 const R = +process.argv[2] || 10;
 console.log('--- 1. pure time-to-kill, no reds, perfect aim (' + R + ' runs): targets base 35s / boss 45s ---');
-for (const n of [1, 9, 11, 49, 51, 10, 20, 50]) {
+for (const n of [1, 6, 11, 16, 26, 36, 49, 51, 10, 20, 30, 50]) {
   const L = g.generateLevel(n), r = []; for (let i = 0; i < R; i++) r.push(playPure(n));
   const secs = r.map(x => x.secs);
-  console.log('L' + String(n).padEnd(3), (L.isBoss ? 'BOSS ' : 'base ') + String(L.isBoss ? L.bossHP : L.baseHP).padEnd(6) + 'HP  MTM ' + String(L.mtm).padEnd(4),
-    'TTK avg ' + avg(secs).toFixed(0) + 's  (min ' + Math.min(...secs).toFixed(0) + ' / max ' + Math.max(...secs).toFixed(0) + ')  theory ' + ((L.isBoss ? L.bossHP : L.baseHP / (1 + 0.02 * (n - 1))) / (9 * L.mtm)).toFixed(0) + 's');
+  console.log('L' + String(n).padEnd(3), (L.isBoss ? 'BOSS ' : 'base ') + String(L.isBoss ? L.bossHP : L.baseHP).padEnd(6) + 'HP  MTM ' + String(L.mtm).padEnd(5),
+    'TTK avg ' + avg(secs).toFixed(0) + 's  (min ' + Math.min(...secs).toFixed(0) + ' / max ' + Math.max(...secs).toFixed(0) + ')  target ' + (L.isBoss ? 45 : 35 * (1 + 0.02 * (L.tier - 1))).toFixed(0) + 's  tier ' + L.tier + ' thr ' + L.throughput.toFixed(0) + '/s');
 }
 
 console.log('--- 2. full games with red waves (perfect aim, ' + R + ' runs each) ---');
-for (const n of [1, 10, 20, 50]) {
+for (const n of [1, 6, 10, 16, 20, 50]) {
   const r = []; for (let i = 0; i < R; i++) r.push(play(n));
   console.log('L' + n, 'win ' + r.filter(x => x.won).length + '/' + R, 'avg ' + avg(r.map(x => x.secs)).toFixed(0) + 's', 'peak reds ' + Math.max(...r.map(x => x.peakR)), 'worst cannon HP ' + Math.min(...r.map(x => x.minCannon)), 'peak blues ' + Math.max(...r.map(x => x.maxMobs)));
 }

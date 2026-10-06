@@ -76,17 +76,39 @@
   var MAX_MOBS = 1500;           // blue pool capacity
   var MAX_RED = 500;             // red pool capacity
   var MOB_R = 4, RED_R = 7;
-  var RED_HP = 2;
-  var MOB_SPEED = 250;           // px/s upward (blue)
-  var RED_SPEED_BASE = MOB_SPEED * 0.75;   // px/s downward (red); scaled per level
-  var FIRE_RATE = 9;             // shots/s
+
+  // ---------- The Armory: player cannon stats ----------
+  //   fireRate: ms between shots; bulletVelocity: px/s upward; piercing: red HP one blue can subtract before dying
+  var Armory = {
+    standard: { name: 'Standard', fireRate: 111, bulletVelocity: 250, piercing: 1 },
+    piercer:  { name: 'Piercer',  fireRate: 111, bulletVelocity: 250, piercing: 2 },
+    rapid:    { name: 'Rapid',    fireRate: 80,  bulletVelocity: 280, piercing: 1 }
+  };
+  var weapon = Armory.standard;
+  var MOB_SPEED = weapon.bulletVelocity;      // px/s upward (blue); follows the equipped weapon
+  var FIRE_RATE = 1000 / weapon.fireRate;     // shots/s
+  function equip(name) { weapon = Armory[name] || Armory.standard; MOB_SPEED = weapon.bulletVelocity; FIRE_RATE = 1000 / weapon.fireRate; }
+
+  // ---------- The Bestiary: red mob dictionary ----------
+  //   speed / radius are multipliers of the base red; hp in blue-damage points
+  var RED_SPEED_BASE = 187.5;     // px/s downward (red); scaled per tier
+  var RedMobTypes = {
+    Basic:    { id: 0, speed: 1.0, radius: 1.0, hp: 2, color: '#ff4d5e', wound: '#ff9a3c' },
+    Tank:     { id: 1, speed: 0.5, radius: 1.5, hp: 5, color: '#8a1020', wound: '#c8404f' },
+    Sprinter: { id: 2, speed: 1.5, radius: 0.7, hp: 1, color: '#ff8a00', wound: '#ffb84d' }
+  };
+  var RT_LIST = [RedMobTypes.Basic, RedMobTypes.Tank, RedMobTypes.Sprinter];
+  var RT_SPEED = new Float32Array(3), RT_RAD = new Float32Array(3), RT_HP = new Uint8Array(3), RT_HIT2 = new Float32Array(3);
+  for (var rti = 0; rti < 3; rti++) {
+    RT_SPEED[rti] = RT_LIST[rti].speed; RT_RAD[rti] = RT_LIST[rti].radius * RED_R; RT_HP[rti] = RT_LIST[rti].hp;
+    RT_HIT2[rti] = (MOB_R + RT_RAD[rti]) * (MOB_R + RT_RAD[rti]);
+  }
   var SPREAD = 14;               // px/s sideways jitter at fire
   var BASE_Y = 52, BASE_H = 64;  // base rect top / height (HUD lives above)
   var BASE_BOTTOM = BASE_Y + BASE_H;
   var CANNON_Y = H - 56;
   var CANNON_MAX_HP = 5;
   var MAX_DT = 1 / 20;           // clamp huge frame gaps
-  var HIT_R2 = (MOB_R + RED_R) * (MOB_R + RED_R);
   var FUNNEL = 0.7;              // 0 = waves from center, 1 = exactly over the blue cluster
   var RED_ATTRACT = 0.8, RED_ATTRACT_MAX = 45;      // red lateral pull toward blue mass
   var BLUE_ATTRACT = 0.5, BLUE_ATTRACT_MAX = 70;    // blue lateral accel toward red mass
@@ -96,10 +118,14 @@
   var MAX_BUMPERS = 8, MAX_HOLES = 4;
   var MAX_WAVE = 150;            // hard cap on red wall size (two walls always fit the 500 pool)
   var NEG_RECHARGE = 0.5;        // '-' gates regain n * this per second
-  var BOSS_R = 34, BOSS_STRAFE = 60;      // boss radius / base strafe speed (px/s)
+  var BOSS_W = W * 0.4, BOSS_H = 56, BOSS_STRAFE = 22;   // mothership: 40% of screen width, slow drift (px/s)
   var SHOTS_PER_SEC = 9;                  // must match FIRE_RATE; used by the HP formulas
   var BASE_TTK = 35, BOSS_TTK = 45;       // target perfect-stream seconds to clear
-  var HP_PER_LEVEL = 0.02;                // +2% base HP per level
+  var HP_PER_TIER = 0.02;                 // +2% base HP per tier
+  var MTM_EFF = 1.05, MTM_EFF_EXP = 0.3;                    // measured share of the theoretical multiplier a real stream achieves
+  var OBST_BUMPER_EFF = 0.92, OBST_HOLE_EFF = 0.85;   // throughput kept per bumper / black hole (measured)
+  var POOL_RATE_CAP = 600;                // blue hits/s the 1500-mob pool can sustain (lifetime ~1.8s, with headroom)
+  var TIER_SIZE = 5;
   var HOLE_R = 80, HOLE_CORE = 10, HOLE_G = 480;    // black hole pull radius / kill radius / pull accel
   var FLAG_BUMPED = 128;
 
@@ -118,7 +144,13 @@
   function clampN(v, a, b) { return v < a ? a : (v > b ? b : v); }
 
   var GATE_SLOTS = [400, 360, 320, 280, 240, 200];            // y centers, bottom to top (40px apart, never overlap)
-  var MULT_POOL = [['x', 2, 'x2'], ['x', 3, 'x3'], ['+', 5, '+5'], ['+', 10, '+10']];
+  var LOW_POOL = [['x', 2, 'x2'], ['+', 2, '+2']];       // wide, near the cannon
+  var HIGH_POOL = [['x', 3, 'x3'], ['+', 10, '+10']];    // narrow, high up near the enemy
+  function tierOf(n) { return Math.ceil(n / TIER_SIZE); }
+  // Throughput (blue hits/s) a perfect stream is expected to sustain: efficiency-scaled MTM, capped by the pool
+  // Measured (bot-sim) efficiency is not constant: it falls as MTM grows (gates are missed, clones spread out, the
+  // pool saturates). Fit: efficiency = MTM_EFF * MTM^-MTM_EFF_EXP  (~0.9 at MTM 2, ~0.35-0.45 at MTM 20-60, ~0.1 at 700).
+  function levelThroughput(mtm) { return Math.min(SHOTS_PER_SEC * MTM_EFF * Math.pow(mtm, 1 - MTM_EFF_EXP), POOL_RATE_CAP); }
 
   // Max Theoretical Multiplier: blues one shot becomes after passing every positive gate, bottom to top
   // (gate defs are ordered bottom to top). Negative gates are ignored.
@@ -126,7 +158,7 @@
     var c = 1;
     for (var i = 0; i < gates.length; i++) {
       if (gates[i][2] === 'x') c *= gates[i][3];
-      else if (gates[i][2] === '+') c += gates[i][3];
+      else if (gates[i][2] === '+') c *= gates[i][3] + 1;   // '+n' turns each mob into n+1
     }
     return c;
   }
@@ -136,60 +168,50 @@
   function generateLevel(n) {
     var rnd = rng32(n * 7919 + 12345);
     var isBoss = (n % 10) === 0;
-    var wMin = Math.min(MAX_WAVE, 8 + (n - 1));          // +1 per level
-    var wMax = Math.min(MAX_WAVE, 12 + 2 * (n - 1));     // +2 per level
+    var tier = tierOf(n), tf = (tier - 1) * TIER_SIZE + 1;     // tier constants are those of the tier's first level
+    var wMin = Math.min(MAX_WAVE, 8 + (tf - 1));
+    var wMax = Math.min(MAX_WAVE, 12 + 2 * (tf - 1));
     var L = {
-      n: n,
-      baseHP: 0, mtm: 1,
+      n: n, tier: tier,
+      baseHP: 0, mtm: 1, throughput: 0,
       isBoss: isBoss,
       bossHP: 0,
-      redInterval: Math.max(2.5, 7.0 * Math.pow(0.98, n - 1)),   // 2% faster every level
+      redInterval: Math.max(2.5, 7.0 * Math.pow(0.98, tf - 1)),
       waveMin: wMin, waveMax: Math.max(wMin, wMax),
-      redSpeedMul: 1 + Math.min(0.5, (n - 1) * 0.005),
+      redSpeedMul: 1 + Math.min(0.5, (tf - 1) * 0.005),
+      mixTank: tier >= 2 ? 0.2 : 0, mixSprinter: tier >= 4 ? 0.2 : 0,   // Bestiary unlocks: Tier 2 Tanks, Tier 4 Sprinters
       gates: [], bumpers: [], holes: []
     };
     var i, j;
 
-    // --- gate mix by tier ---
-    var m = clampN(1 + (((n - 1) / 3) | 0), 1, 4);                       // multiplier gates
-    var k = n >= 11 ? Math.min(2, 1 + (((n - 11) / 10) | 0)) : 0;        // negative gates (11+)
-    var seq = [];
-    for (i = 0; i < m; i++) seq.push('M');
-    for (i = 0; i < k; i++) seq.push('N');
-    for (i = seq.length - 1; i > 0; i--) { j = (rnd() * (i + 1)) | 0; var tmp = seq[i]; seq[i] = seq[j]; seq[j] = tmp; }
-    if (seq[0] !== 'M') { for (i = 1; i < seq.length; i++) if (seq[i] === 'M') { seq[i] = 'N'; seq[0] = 'M'; break; } }
-
-    var mults = [], hasX = false;
-    for (i = 0; i < m; i++) {
-      mults.push((n === 1 && i === 0) ? MULT_POOL[0] : MULT_POOL[(rnd() * 4) | 0]);
-      if (mults[i][0] === 'x') hasX = true;
-    }
-    if (!hasX) mults[0] = MULT_POOL[rnd() < 0.5 ? 0 : 1];                // always at least one multiplier
-    var mi = 0, defs = [];
+    // --- gate layout (risk vs reward): lows wide + low, highs narrow + high, negatives wide, directly below a high ---
+    var nLow = n === 1 ? 1 : 1 + ((rnd() * 2) | 0), nHigh = n === 1 ? 0 : 1 + ((rnd() * 2) | 0);
+    var nNeg = tier >= 3 ? ((nHigh === 2 && tier >= 4) ? 2 : 1) : 0;          // negative gates arrive in Tier 3
+    if (nNeg > nHigh) nNeg = nHigh;
+    var seq = [];                                                            // bottom to top
+    for (i = 0; i < nLow; i++) seq.push('L');
+    for (i = 0; i < nHigh; i++) { if (i < nNeg) seq.push('N'); seq.push('H'); }
+    var defs = [], hasX = false;
     for (i = 0; i < seq.length; i++) {
-      var speed = Math.min(240, 55 + n * 2 + rnd() * 20);
-      if (seq[i] === 'M') {
-        var d = mults[mi++];
-        var w = Math.round(clampN(130 - ((n / 2) | 0), 90, 130) + (rnd() - 0.5) * 20);
+      var speed = Math.min(240, 55 + n * 2 + rnd() * 20), kind = seq[i], d, w;
+      if (kind === 'L') {
+        d = LOW_POOL[(rnd() * 2) | 0]; w = Math.round(clampN(135 - tier, 100, 135) + (rnd() - 0.5) * 16);
+        defs.push([w, GATE_SLOTS[i], d[0], d[1], d[2], rnd() < 0.5, speed]);
+      } else if (kind === 'H') {
+        d = HIGH_POOL[(rnd() * 2) | 0]; w = Math.round(clampN(70 - tier * 2, 44, 70) + (rnd() - 0.5) * 10);
         defs.push([w, GATE_SLOTS[i], d[0], d[1], d[2], rnd() < 0.5, speed]);
       } else {
-        var neg = rnd() < 0.5 ? ['-', 10, '-10'] : ['/', 2, '/2'];
-        defs.push([80 + Math.round(rnd() * 20), GATE_SLOTS[i], neg[0], neg[1], neg[2], false, speed * 1.05]);
+        d = rnd() < 0.5 ? ['-', 10, '-10'] : ['/', 2, '/2']; w = 110 + Math.round(rnd() * 20);
+        defs.push([w, GATE_SLOTS[i], d[0], d[1], d[2], false, speed * 1.05]);
       }
+      if (d[0] === 'x') hasX = true;
     }
-    for (i = 0; i < defs.length; i++) {              // negative gates slide opposite the nearest multiplier gate
-      if (defs[i][2] !== '-' && defs[i][2] !== '/') continue;
-      var best = -1, bd = 99;
-      for (j = 0; j < defs.length; j++) {
-        if (defs[j][2] === '-' || defs[j][2] === '/') continue;
-        if (Math.abs(i - j) < bd) { bd = Math.abs(i - j); best = j; }
-      }
-      defs[i][5] = !defs[best][5];
+    if (!hasX) { var fx = defs[0], hi = fx[0] < 90; fx[2] = 'x'; fx[3] = hi ? 3 : 2; fx[4] = hi ? 'x3' : 'x2'; }   // always at least one multiplier
+    for (i = 0; i < defs.length; i++) {                 // each negative slides opposite the high gate it guards (the next one up)
+      if (seq[i] === 'N') defs[i][5] = !defs[i + 1][5];
     }
     L.gates = defs;
     L.mtm = calculateLevelMTM(defs);
-    L.baseHP = Math.round(SHOTS_PER_SEC * L.mtm * BASE_TTK * (1 + HP_PER_LEVEL * (n - 1)));
-    L.bossHP = isBoss ? SHOTS_PER_SEC * L.mtm * BOSS_TTK : 0;
 
     // --- static obstacles (placed away from gate rows and each other) ---
     var taken = [];
@@ -214,6 +236,10 @@
       var nb = Math.min(MAX_BUMPERS, 2 + (((n - 31) / 4) | 0));
       for (i = 0; i < nb; i++) { var b = place(12 + rnd() * 5, true, 140, 500); if (b) L.bumpers.push(b); }
     }
+    // HP is set last so obstacle derating can use the final layout: bumpers and black holes bleed stream throughput
+    L.throughput = levelThroughput(L.mtm) * Math.pow(OBST_BUMPER_EFF, L.bumpers.length) * Math.pow(OBST_HOLE_EFF, L.holes.length);
+    L.baseHP = Math.round(L.throughput * BASE_TTK * (1 + HP_PER_TIER * (tier - 1)));
+    L.bossHP = isBoss ? Math.round(L.throughput * BOSS_TTK) : 0;
     return L;
   }
 
@@ -241,19 +267,20 @@
   var mvx = new Float32Array(MAX_MOBS);
   var mvy = new Float32Array(MAX_MOBS);
   var mmask = new Uint8Array(MAX_MOBS);   // bits 0-5: gates already passed; bit 7: bumped/sucked (vy relaxes back up)
+  var bpierce = new Uint8Array(MAX_MOBS);   // remaining red-HP this blue can still subtract
   var bdead = new Uint8Array(MAX_MOBS);   // marked during collisions, compacted afterwards
   var mobCount = 0;                       // active blue are indices [0, mobCount)
 
   function spawnMob(x, y, vx, vy, mask) {
     if (mobCount >= MAX_MOBS) return false;     // pool exhausted: drop, never allocate
     var i = mobCount++;
-    mx[i] = x; my[i] = y; mvx[i] = vx; mvy[i] = vy; mmask[i] = mask; bdead[i] = 0;
+    mx[i] = x; my[i] = y; mvx[i] = vx; mvy[i] = vy; mmask[i] = mask; bdead[i] = 0; bpierce[i] = weapon.piercing;
     return true;
   }
   function killMob(i) {                         // swap-remove with last active
     var l = --mobCount;
     if (i !== l) {
-      mx[i] = mx[l]; my[i] = my[l]; mvx[i] = mvx[l]; mvy[i] = mvy[l]; mmask[i] = mmask[l]; bdead[i] = 0;
+      mx[i] = mx[l]; my[i] = my[l]; mvx[i] = mvx[l]; mvy[i] = mvy[l]; mmask[i] = mmask[l]; bpierce[i] = bpierce[l]; bdead[i] = 0;
     }
   }
 
@@ -264,12 +291,14 @@
   var rkx = new Float32Array(MAX_RED);     // knock velocity from bumpers / black holes (decays)
   var rky = new Float32Array(MAX_RED);
   var rdead = new Uint8Array(MAX_RED);
+  var rtype = new Uint8Array(MAX_RED);     // Bestiary type id
   var rhp = new Uint8Array(MAX_RED);       // red shield: RED_HP blues to destroy one red
   var redCount = 0;
-  function spawnRed(x, y) {
+  function spawnRed(x, y, type) {
     if (redCount >= MAX_RED) return false;
     var i = redCount++;
-    rx[i] = x; ry[i] = y; rvx[i] = 0; rkx[i] = 0; rky[i] = 0; rdead[i] = 0; rhp[i] = RED_HP;
+    type = type | 0;
+    rx[i] = x; ry[i] = y; rvx[i] = 0; rkx[i] = 0; rky[i] = 0; rdead[i] = 0; rhp[i] = RT_HP[type]; rtype[i] = type;
     return true;
   }
 
@@ -365,6 +394,7 @@
   var bossDir = 1, bossWave = 10, bossInterval = 4;
   var bossActive = false, bossMaxHP = 0, bossHP = 0, bossX = W / 2, bossY = 0, bossSpeed = 0, bossHeat = 0;
   var cannonHP = CANNON_MAX_HP;
+  var mixTank = 0, mixSprinter = 0;
   var redInterval = 7, waveMin = 8, waveMax = 12, redSpeed = RED_SPEED_BASE;
   var cannonX = W / 2, targetX = W / 2;
   var fireAcc = 0, fireCount = 0;
@@ -457,9 +487,9 @@
     baseMaxHP = L.baseHP; baseHP = baseMaxHP;
     bossActive = false; bossMaxHP = L.bossHP; bossHP = L.bossHP; bossHeat = 0;
     cannonHP = CANNON_MAX_HP;
-    redInterval = L.redInterval; waveMin = L.waveMin; waveMax = L.waveMax; redSpeed = RED_SPEED_BASE * L.redSpeedMul;
-    bossSpeed = BOSS_STRAFE * L.redSpeedMul; bossDir = 1; bossX = W / 2; bossY = BASE_Y + BOSS_R;
-    bossWave = Math.min(40, 10 + ((level / 5) | 0)); bossInterval = Math.max(2.2, 4.0 * Math.pow(0.99, level - 1));
+    redInterval = L.redInterval; waveMin = L.waveMin; waveMax = L.waveMax; redSpeed = RED_SPEED_BASE * L.redSpeedMul; mixTank = L.mixTank; mixSprinter = L.mixSprinter;
+    bossSpeed = BOSS_STRAFE * L.redSpeedMul; bossDir = 1; bossX = W / 2; bossY = BASE_Y + BOSS_H / 2 + 20;
+    bossWave = Math.min(14, 5 + ((level / 10) | 0)); bossInterval = Math.max(4.5, 7 - L.tier * 0.15);   // sparse, so the cannon survives
     state = PLAYING;
     fireAcc = 0; fireCount = 0;
     redTimer = 3;                      // grace period before the first wall / the boss
@@ -521,13 +551,14 @@
       var row = (k / cols) | 0, col = k - row * cols;
       var x = center + (col - (cols - 1) * 0.5) * WALL_STEP + ((row & 1) ? WALL_STEP * 0.25 : -WALL_STEP * 0.25) + (Math.random() - 0.5) * 2;
       var y = (topY !== undefined ? topY : BASE_BOTTOM) + RED_R + 1 + row * WALL_STEP;
-      if (!spawnRed(x, y)) break;
+      var rr = Math.random();
+      if (!spawnRed(x, y, rr < mixSprinter ? 2 : (rr < mixSprinter + mixTank ? 1 : 0))) break;
     }
   }
 
   function spawnBoss() {
     bossActive = true;
-    bossX = W / 2; bossY = BASE_Y + BOSS_R;
+    bossX = W / 2; bossY = BASE_Y + BOSS_H / 2 + 20;
     bossHP = bossMaxHP;
     sfxBoss();
   }
@@ -569,7 +600,7 @@
       if (redTimer <= 0) {
         if (isBossLevel) {
           if (!bossActive) spawnBoss();
-          else spawnWave(bossWave, bossX, bossY + BOSS_R - 6);   // dense wave dropped from the mothership
+          else spawnWave(bossWave, bossX, bossY + BOSS_H / 2 - 6);   // dense wave dropped from the mothership
           redTimer = bossInterval * (0.8 + Math.random() * 0.4);
         }
         else { redTimer = redInterval * (0.7 + Math.random() * 0.6); spawnWave(); }
@@ -587,7 +618,7 @@
 
     // Blue mobs: iterate with live mobCount (clones appended mid-loop carry inherited gate bits)
     var bSum = 0, bN = 0;
-    var bossR2 = (BOSS_R + MOB_R) * (BOSS_R + MOB_R), holeR2 = HOLE_R * HOLE_R;
+    var holeR2 = HOLE_R * HOLE_R, bhx = BOSS_W / 2 + MOB_R, bhy = BOSS_H / 2 + MOB_R;
     i = 0;
     while (i < mobCount) {
       var x = mx[i] + mvx[i] * dt;
@@ -640,7 +671,7 @@
       // Boss: each blue impact does 1 damage
       if (bossActive) {
         var sdx = x - bossX, sdy = y - bossY;
-        if (sdx * sdx + sdy * sdy <= bossR2) {
+        if (sdx <= bhx && sdx >= -bhx && sdy <= bhy && sdy >= -bhy) {
           bossHP--; bossHeat = bossHeat < 1 ? bossHeat + 0.1 : 1;
           if ((bossHP & 15) === 0) spawnPop(x, y);
           sfxHit();
@@ -705,7 +736,7 @@
       rvx[i] = v;
       rkx[i] *= kd; rky[i] *= kd;
       var nx = rx[i] + (v + rkx[i]) * dt;
-      var ny = ry[i] + rdy + rky[i] * dt;
+      var ny = ry[i] + rdy * RT_SPEED[rtype[i]] + rky[i] * dt;
       nx = nx < RED_R ? RED_R : (nx > W - RED_R ? W - RED_R : nx);
       if (ny < BASE_BOTTOM + RED_R) { ny = BASE_BOTTOM + RED_R; if (rky[i] < 0) rky[i] = 0; }
 
@@ -737,8 +768,8 @@
     // Boss hovers at the base line, strafing left and right like a moving base
     if (bossActive) {
       bossX += bossDir * bossSpeed * dt;
-      if (bossX > W - BOSS_R - 12) { bossX = W - BOSS_R - 12; bossDir = -1; }
-      else if (bossX < BOSS_R + 12) { bossX = BOSS_R + 12; bossDir = 1; }
+      if (bossX > W - BOSS_W / 2 - 10) { bossX = W - BOSS_W / 2 - 10; bossDir = -1; }
+      else if (bossX < BOSS_W / 2 + 10) { bossX = BOSS_W / 2 + 10; bossDir = 1; }
     }
 
     // Blue-vs-red: bucket blues in the grid, each red tests its 3x3 neighbourhood.
@@ -762,9 +793,11 @@
             for (var b = gridHead[yy * COLS + xx]; b !== -1; b = gridNext[b]) {
               if (bdead[b]) continue;
               var dx = mx[b] - rx[r], dy = my[b] - ry[r];
-              if (dx * dx + dy * dy <= HIT_R2) {
-                bdead[b] = 1; killedBlue++;
-                if (--rhp[r] === 0) { rdead[r] = 1; killedRed++; }   // first hit only wounds (orange)
+              if (dx * dx + dy * dy <= RT_HIT2[rtype[r]]) {
+                var dmg = bpierce[b] < rhp[r] ? bpierce[b] : rhp[r];     // piercing: one blue subtracts up to `piercing` red HP
+                rhp[r] -= dmg; bpierce[b] -= dmg;
+                if (bpierce[b] === 0) { bdead[b] = 1; killedBlue++; }
+                if (rhp[r] === 0) { rdead[r] = 1; killedRed++; }   // first hit only wounds (orange)
                 spawnPop((mx[b] + rx[r]) * 0.5, (my[b] + ry[r]) * 0.5);
                 sfxHit();
                 break search;
@@ -778,7 +811,7 @@
       var w = 0;
       for (i = 0; i < mobCount; i++) {
         if (bdead[i]) continue;
-        if (w !== i) { mx[w] = mx[i]; my[w] = my[i]; mvx[w] = mvx[i]; mvy[w] = mvy[i]; mmask[w] = mmask[i]; }
+        if (w !== i) { mx[w] = mx[i]; my[w] = my[i]; mvx[w] = mvx[i]; mvy[w] = mvy[i]; mmask[w] = mmask[i]; bpierce[w] = bpierce[i]; }
         bdead[w] = 0;
         w++;
       }
@@ -788,7 +821,7 @@
       var wr = 0;
       for (i = 0; i < redCount; i++) {
         if (rdead[i]) continue;
-        if (wr !== i) { rx[wr] = rx[i]; ry[wr] = ry[i]; rvx[wr] = rvx[i]; rhp[wr] = rhp[i]; rkx[wr] = rkx[i]; rky[wr] = rky[i]; }
+        if (wr !== i) { rx[wr] = rx[i]; ry[wr] = ry[i]; rvx[wr] = rvx[i]; rhp[wr] = rhp[i]; rtype[wr] = rtype[i]; rkx[wr] = rkx[i]; rky[wr] = rky[i]; }
         rdead[wr] = 0;
         wr++;
       }
@@ -802,7 +835,7 @@
       if (ry[i] >= CANNON_Y) {
         spawnPop(rx[i], CANNON_Y);
         var l = --redCount;
-        if (i !== l) { rx[i] = rx[l]; ry[i] = ry[l]; rvx[i] = rvx[l]; rhp[i] = rhp[l]; rkx[i] = rkx[l]; rky[i] = rky[l]; }
+        if (i !== l) { rx[i] = rx[l]; ry[i] = ry[l]; rvx[i] = rvx[l]; rhp[i] = rhp[l]; rtype[i] = rtype[l]; rkx[i] = rkx[l]; rky[i] = rky[l]; }
         rdead[i] = 0;
         hits++;
       } else i++;
@@ -935,37 +968,40 @@
     }
     ctx.fill();
 
-    // Red mobs: two batches (full health red, wounded orange)
-    for (var pass = 2; pass >= 1; pass--) {
-      ctx.fillStyle = pass === 2 ? '#ff4d5e' : '#ff9a3c';
-      ctx.beginPath();
-      for (i = 0; i < redCount; i++) {
-        if (rhp[i] !== pass) continue;
-        ctx.moveTo(rx[i] + RED_R, ry[i]);
-        ctx.arc(rx[i], ry[i], RED_R, 0, 6.2832);
+    // Red mobs: per Bestiary type, healthy and wounded batches
+    for (var ty = 0; ty < 3; ty++) {
+      var rt = RT_LIST[ty], rr2 = RT_RAD[ty];
+      for (var wd = 0; wd < 2; wd++) {
+        ctx.fillStyle = wd ? rt.wound : rt.color;
+        ctx.beginPath();
+        for (i = 0; i < redCount; i++) {
+          if (rtype[i] !== ty || (rhp[i] < RT_HP[ty]) !== (wd === 1)) continue;
+          ctx.moveTo(rx[i] + rr2, ry[i]);
+          ctx.arc(rx[i], ry[i], rr2, 0, 6.2832);
+        }
+        ctx.fill();
       }
-      ctx.fill();
     }
 
-    // Boss
+    // Boss (mothership): wide rounded hull
     if (bossActive) {
-      var pulse = 1 + Math.sin(clock * 4) * 0.03;
       var bh = bossHeat * (0.5 + 0.5 * Math.sin(clock * 60));
+      var bx0 = bossX - BOSS_W / 2, by0 = bossY - BOSS_H / 2;
       ctx.fillStyle = 'rgb(' + ((150 + 105 * bh) | 0) + ',' + ((24 + 100 * bh) | 0) + ',' + ((40 + 80 * bh) | 0) + ')';
-      ctx.beginPath(); ctx.arc(bossX, bossY, BOSS_R * pulse, 0, 6.2832); ctx.fill();
+      roundRect(bx0, by0, BOSS_W, BOSS_H, 22); ctx.fill();
       ctx.strokeStyle = '#ff4d5e'; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(bossX, bossY, BOSS_R * pulse, 0, 6.2832); ctx.stroke();
+      roundRect(bx0, by0, BOSS_W, BOSS_H, 22); ctx.stroke();
       ctx.fillStyle = '#fff';                         // angry eyes
-      ctx.beginPath(); ctx.arc(bossX - 11, bossY - 6, 6, 0, 6.2832); ctx.arc(bossX + 11, bossY - 6, 6, 0, 6.2832); ctx.fill();
+      ctx.beginPath(); ctx.arc(bossX - 26, bossY - 6, 7, 0, 6.2832); ctx.arc(bossX + 26, bossY - 6, 7, 0, 6.2832); ctx.fill();
       ctx.fillStyle = '#200';
-      ctx.beginPath(); ctx.arc(bossX - 11, bossY - 4, 3, 0, 6.2832); ctx.arc(bossX + 11, bossY - 4, 3, 0, 6.2832); ctx.fill();
+      ctx.beginPath(); ctx.arc(bossX - 26, bossY - 4, 3.5, 0, 6.2832); ctx.arc(bossX + 26, bossY - 4, 3.5, 0, 6.2832); ctx.fill();
       ctx.fillStyle = '#fff';
       ctx.font = '800 14px system-ui, sans-serif';
-      ctx.fillText(fmt(bossHP), bossX, bossY + 16);
+      ctx.fillText(fmt(bossHP), bossX, bossY + 17);
       ctx.fillStyle = 'rgba(0,0,0,0.5)';
-      ctx.fillRect(bossX - 34, bossY - BOSS_R - 12, 68, 5);
+      ctx.fillRect(bx0 + 10, by0 - 9, BOSS_W - 20, 5);
       ctx.fillStyle = '#ff9a3c';
-      ctx.fillRect(bossX - 34, bossY - BOSS_R - 12, 68 * (bossHP / bossMaxHP), 5);
+      ctx.fillRect(bx0 + 10, by0 - 9, (BOSS_W - 20) * (bossHP / bossMaxHP), 5);
     }
 
     // Collision pops
@@ -1039,14 +1075,15 @@
                  level: level, gateCount: gateCount, bumpCount: bumpCount, holeCount: holeCount,
                  isBoss: isBossLevel, bossActive: bossActive, bossHP: bossHP, bossMaxHP: bossMaxHP, bossY: bossY, bossX: bossX,
                  capBlue: MAX_MOBS, capRed: MAX_RED,
-                 redX: sl.call(rx, 0, redCount), redY: sl.call(ry, 0, redCount), redHP: sl.call(rhp, 0, redCount),
+                 redX: sl.call(rx, 0, redCount), redY: sl.call(ry, 0, redCount), redHP: sl.call(rhp, 0, redCount), redType: sl.call(rtype, 0, redCount),
                  blueX: sl.call(mx, 0, mobCount), blueY: sl.call(my, 0, mobCount) };
       },
       aim: function (x) { targetX = x; cannonX = x; },
       touch: function (b) { dragging = !!b; },
       setBaseHP: function (n) { baseHP = n; ghostHP = n; },
       setBossHP: function (n) { bossHP = n; },
-      spawnBoss: spawnBoss, calculateLevelMTM: calculateLevelMTM,
+      spawnBoss: spawnBoss, calculateLevelMTM: calculateLevelMTM, tierOf: tierOf, levelThroughput: levelThroughput,
+      Armory: Armory, RedMobTypes: RedMobTypes, equip: equip,
       setBossSpeed: function (pxPerSec) { bossSpeed = pxPerSec; },
       spawnBlue: function (x, y, vx, vy, mask) { return spawnMob(x, y, vx, vy, mask || 0); },
       spawnRed: spawnRed,
