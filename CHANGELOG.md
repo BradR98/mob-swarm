@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Cannon no longer auto-fires. It fires only while the player is touching/dragging and stops the instant the touch ends (also on pointer-capture loss and window blur). A 1-shot cooldown charges while idle so a tap fires at once but tapping cannot exceed the 9 shots/s rate.
+
+### Changed (balance pass)
+- Red waves are now dense clustered walls (staggered rows, ~2:1 aspect, emerging all at once, centered toward the blue cluster) instead of a single-file line.
+- Wave sizes per level: L1 8-12, L2 20-25, L3 40-50 reds.
+- Wave interval raised to 7.0s / 8.5s / 10.0s (was 3.0 / 1.9 / 1.1s) and first-wave grace set to 3s. At the old intervals, a 40-50 wall every ~1s would have been unwinnable (every leaked red costs 1 cannon HP).
+- The red mass now drifts toward the blue mass as a single body, so walls keep their shape instead of collapsing into one column.
+- Added `test/bot-sim.js` (idealised-bot balance simulator) and tests for fire gating, wave sizes/shape, wall integrity and 500-red/1500-blue stress timing.
+
 ### Added
 - Cannon shield: 5 HP pips, red flash on hit; Defeat only at 0 HP (replaces instant defeat).
 - Red waves funnel toward the blue cluster; red and blue masses attract laterally.

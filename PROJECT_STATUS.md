@@ -23,7 +23,7 @@ _Last updated: 2026-10-05_
 - [x] `index.html` JS passes syntax check and headless logic test
 - [x] Headless suite: 28 checks (gates, collisions, shield, funnel, levels)
 - [ ] Audio verified on a real device (iOS needs a first tap to unlock)
-- [ ] Balance playtest of levels 1-3 on a phone
+- [ ] Balance: bot sim shows idealised play clears the base in ~5s on all levels; decide on base HP / wave timing (see CHANGELOG)
 - [ ] Manual test on iOS Safari
 - [ ] Manual test on Android Chrome
 - [ ] Sustained 60 FPS confirmed with 500+ active mobs

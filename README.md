@@ -29,7 +29,7 @@ Open `http://localhost:8000` on desktop, or `http://<your-LAN-IP>:8000` from a p
 | Input | Action |
 |-------|--------|
 | Touch / mouse drag horizontally | Move and aim the cannon |
-| Hold | Cannon fires continuously |
+| Hold / keep touching | Cannon fires continuously; releasing stops fire |
 | Restart button | Appears after victory |
 
 ## Add to Home Screen

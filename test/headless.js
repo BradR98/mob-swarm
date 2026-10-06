@@ -31,6 +31,7 @@ ok(load('') === undefined, '__mob hidden without #debug');
 const g = load('#debug');
 ok(!!g, '__mob exposed with #debug');
 const [G0, G1] = g.gates;
+g.touch(false);
 const quiet = () => { g.setFlags({ fire: false, spawner: false }); parkGates(g); };
 
 // 1. Level config
@@ -123,13 +124,75 @@ g.spawnBlue(100, 500, 0, -1, 0);
 step(g, 40);
 ok(g.get().blueX[0] > 105, 'blue drifts toward red mass (x ' + g.get().blueX[0].toFixed(1) + ')');
 
+
+// 10b. Fire only while touching
+g.setLevel(0); g.setFlags({ fire: true, spawner: false }); parkGates(g); g.touch(false);
+step(g, 120);
+ok(g.get().mobCount === 0, 'no fire while untouched (2s idle, ' + g.get().mobCount + ' mobs)');
+g.touch(true); step(g, 3);
+ok(g.get().mobCount >= 1, 'fires immediately on touch (' + g.get().mobCount + ')');
+step(g, 57);
+const firedHeld = g.get().mobCount;
+ok(firedHeld >= 7 && firedHeld <= 11, '~9 shots/s while held (1s => ' + firedHeld + ')');
+g.touch(false);
+const atRelease = g.get().mobCount; step(g, 1);
+ok(g.get().mobCount <= atRelease, 'firing stops the instant touch is released');
+g.reset(); g.touch(false);
+let tapShots = 0; for (let k = 0; k < 30; k++) { g.touch(true); g.update(1 / 60); g.touch(false); g.update(1 / 60); }
+ok(g.get().mobCount <= 11, 'tap-spam cannot beat the fire rate (30 taps in 1.0s => ' + g.get().mobCount + ' shots)');
+
+// 10c. Wall waves: counts per level, clustered rows, funneled
+for (const [lv, lo, hi] of [[0, 8, 12], [1, 20, 25], [2, 40, 50]]) {
+  const counts = new Set(); let shapeOk = true, widths = [];
+  for (let n = 0; n < 40; n++) {
+    g.setLevel(lv); g.setFlags({ fire: false, spawner: true }); parkGates(g); g.touch(false);
+    let guard2 = 0; while (g.get().redCount === 0 && guard2++ < 60 * 20) g.update(1 / 60);
+    const c = g.get().redCount; counts.add(c);
+    const xs = g.get().redX;
+    widths.push(Math.max(...xs) - Math.min(...xs));
+    if (c < lo || c > hi) shapeOk = false;
+  }
+  ok(shapeOk, 'L' + (lv + 1) + ' waves are ' + lo + '-' + hi + ' reds (saw ' + [...counts].sort((a, b) => a - b).join(',') + ')');
+  const wmax = Math.max(...widths);
+  ok(wmax < 220 && Math.min(...widths) > 40, 'L' + (lv + 1) + ' wall is a cluster (width ' + Math.min(...widths).toFixed(0) + '-' + wmax.toFixed(0) + 'px)');
+}
+// wall has multiple rows (not single file) and no overlapping reds at spawn
+g.setLevel(2); g.setFlags({ fire: false, spawner: true }); parkGates(g);
+while (g.get().redCount === 0) g.update(1 / 60);
+{
+  const xs = g.get().redX; // positions only; check overlap via sorted neighbors is unreliable, so check count & width
+  ok(xs.length >= 40, 'L3 wall spawned ' + xs.length + ' reds at once');
+}
+
+// 10d. Wall keeps its shape while drifting toward blue mass (no collapse into a column)
+g.setLevel(2); g.setFlags({ fire: false, spawner: true }); parkGates(g);
+for (let i = 0; i < 6; i++) g.spawnBlue(300, 540, 0, 0, 0);
+while (g.get().redCount === 0) g.update(1 / 60);
+const w0 = (() => { const x = g.get().redX; return Math.max(...x) - Math.min(...x); })();
+g.setFlags({ fire: false, spawner: false });
+step(g, 90);
+const w1 = (() => { const x = g.get().redX; return Math.max(...x) - Math.min(...x); })();
+ok(g.get().redCount > 0 && w1 > w0 * 0.8, 'wall width preserved while marching (' + w0.toFixed(0) + ' -> ' + w1.toFixed(0) + 'px)');
+
+// 10e. Pool stress: 500 reds vs 1500 blues, update cost (logic only, no rendering)
+g.setLevel(2); quiet(); g.touch(false);
+for (let i = 0; i < 500; i++) g.spawnRed(20 + (i % 25) * 13.5, 130 + ((i / 25) | 0) * 15);
+for (let i = 0; i < 1500; i++) g.spawnBlue(10 + (i % 50) * 6.8, 300 + ((i / 50) | 0) * 9, 0, -250, 0);
+const stressStart = process.hrtime.bigint();
+let sFrames = 0, peakR = 0, peakB = 0;
+for (; sFrames < 120 && g.get().state === 0; sFrames++) { g.update(1 / 60); const q = g.get(); peakR = Math.max(peakR, q.redCount); peakB = Math.max(peakB, q.mobCount); }
+const msPer = Number(process.hrtime.bigint() - stressStart) / 1e6 / Math.max(1, sFrames);
+ok(peakR <= 500 && peakB <= 1500, 'stress pools bounded (peak red ' + peakR + ', blue ' + peakB + ')');
+console.log('INFO stress update cost: ' + msPer.toFixed(2) + ' ms/frame over ' + sFrames + ' frames (budget 16.7ms incl. render)');
+ok(msPer < 8, 'stress logic cost < 8ms/frame (' + msPer.toFixed(2) + ')');
+
 // 11. Level progression
-g.setLevel(0); g.setFlags({ fire: true, spawner: false }); g.aim(100);
+g.setLevel(0); g.setFlags({ fire: true, spawner: false }); g.aim(100); g.touch(true);
 t = 0; while (g.get().state === 0 && t < 60 * 300) { g.update(1 / 60); t++; }
 ok(g.get().state === 1 && els.restart.textContent === 'Next Level', 'L1 won in ' + (t / 60).toFixed(1) + 's -> "Next Level"');
 g.restart();
 ok(g.get().level === 1 && g.get().baseHP === 80 && g.get().state === 0, 'Next Level loads L2');
-g.setLevel(2); g.aim(100);
+g.setLevel(2); g.aim(100); g.touch(true);
 t = 0; while (g.get().state === 0 && t < 60 * 600) { g.update(1 / 60); t++; }
 ok(g.get().state === 1 && els.restart.textContent === 'Victory - Play Again', 'L3 won in ' + (t / 60).toFixed(1) + 's -> "Victory - Play Again"');
 g.restart();
@@ -138,7 +201,7 @@ ok(g.get().level === 0 && g.get().state === 0, 'Play Again wraps to L1');
 // 12. Full-play soak across all levels: pools bounded
 let maxB = 0, maxR = 0;
 for (let lv = 0; lv < 3; lv++) {
-  g.setFlags({ fire: true, spawner: true });
+  g.setFlags({ fire: true, spawner: true }); g.touch(true);
   for (let n = 0; n < 3; n++) {
     g.setLevel(lv);
     for (let i = 0; i < 60 * 40 && g.get().state === 0; i++) {

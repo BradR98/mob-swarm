@@ -89,11 +89,11 @@
   // ---------- Levels ----------
   // gates: [width, y, type, n, label, startRight, speed]
   var LEVELS = [
-    { baseHP: 40,  redInterval: 3.0, wave: 1, redSpeedMul: 1.0,
+    { baseHP: 40,  redInterval: 7.0,  waveMin: 8,  waveMax: 12, redSpeedMul: 1.0,
       gates: [[130, 360, 'x', 2, 'x2', false, 60]] },
-    { baseHP: 80,  redInterval: 1.9, wave: 2, redSpeedMul: 1.0,
+    { baseHP: 80,  redInterval: 8.5,  waveMin: 20, waveMax: 25, redSpeedMul: 1.0,
       gates: [[130, 360, 'x', 2, 'x2', false, 80], [110, 280, '+', 5, '+5', true, 100]] },
-    { baseHP: 150, redInterval: 1.1, wave: 3, redSpeedMul: 1.15,
+    { baseHP: 150, redInterval: 10.0, waveMin: 40, waveMax: 50, redSpeedMul: 1.15,
       gates: [[110, 360, 'x', 2, 'x2', false, 190], [90, 280, '+', 5, '+5', true, 230]] }
   ];
   var MAX_GATES = 2;
@@ -223,7 +223,7 @@
   var level = 0;
   var baseMaxHP = 40, baseHP = 40;
   var cannonHP = CANNON_MAX_HP;
-  var redInterval = 3, waveSize = 1, redSpeed = RED_SPEED_BASE;
+  var redInterval = 7, waveMin = 8, waveMax = 12, redSpeed = RED_SPEED_BASE;
   var cannonX = W / 2, targetX = W / 2;
   var fireAcc = 0, fireCount = 0;
   var redTimer = 1.5;
@@ -285,7 +285,9 @@
     if (dragging || e.pointerType === 'mouse') targetX = pointerToLogicalX(e);
     e.preventDefault();
   });
-  function endDrag() { dragging = false; }
+  function endDrag() { dragging = false; }   // firing stops immediately on release
+  canvas.addEventListener('lostpointercapture', endDrag);
+  window.addEventListener('blur', endDrag);
   canvas.addEventListener('pointerup', endDrag);
   canvas.addEventListener('pointercancel', endDrag);
   document.addEventListener('touchmove', function (e) { e.preventDefault(); }, { passive: false });
@@ -298,10 +300,10 @@
     mobCount = 0; redCount = 0;
     baseMaxHP = L.baseHP; baseHP = baseMaxHP;
     cannonHP = CANNON_MAX_HP;
-    redInterval = L.redInterval; waveSize = L.wave; redSpeed = RED_SPEED_BASE * L.redSpeedMul;
+    redInterval = L.redInterval; waveMin = L.waveMin; waveMax = L.waveMax; redSpeed = RED_SPEED_BASE * L.redSpeedMul;
     state = PLAYING;
     fireAcc = 0; fireCount = 0;
-    redTimer = Math.min(1.5, redInterval);
+    redTimer = 3;                      // grace period before the first wall
     hitFlash = 0; cannonFlash = 0;
     blueCX = W / 2; blueN = 0;
     for (var p = 0; p < POP_MAX; p++) popLife[p] = 0;
@@ -348,13 +350,21 @@
     }
   }
 
-  // Red wave: centered between the map center and the blue cluster (funneling).
+  // Red wave: a dense wall (staggered rows, ~2:1 aspect), centered between the map center
+  // and the blue cluster (funneling), emerging from the base all at once.
+  var WALL_STEP = 16;                       // > red diameter (14): no overlap
   function spawnWave() {
+    var n = waveMin + ((Math.random() * (waveMax - waveMin + 1)) | 0);
+    var cols = Math.min(12, Math.ceil(Math.sqrt(n * 2)));
+    var halfW = (cols - 1) * WALL_STEP * 0.5 + WALL_STEP * 0.25;
     var center = blueN > 0 ? W / 2 + (blueCX - W / 2) * FUNNEL : W / 2;
-    for (var k = 0; k < waveSize; k++) {
-      var x = center + (k - (waveSize - 1) * 0.5) * 20 + (Math.random() - 0.5) * 8;
-      x = x < 24 ? 24 : (x > W - 24 ? W - 24 : x);
-      spawnRed(x, BASE_BOTTOM + RED_R + 1);
+    var lo = halfW + RED_R + 4, hi = W - halfW - RED_R - 4;
+    center = center < lo ? lo : (center > hi ? hi : center);
+    for (var k = 0; k < n; k++) {
+      var row = (k / cols) | 0, col = k - row * cols;
+      var x = center + (col - (cols - 1) * 0.5) * WALL_STEP + ((row & 1) ? WALL_STEP * 0.25 : -WALL_STEP * 0.25) + (Math.random() - 0.5) * 2;
+      var y = BASE_BOTTOM + RED_R + 1 + row * WALL_STEP;
+      if (!spawnRed(x, y)) break;
     }
   }
 
@@ -371,15 +381,18 @@
       else if (G.x > G.max) { G.x = G.max; G.vx = -Math.abs(G.vx); }
     }
 
-    // Cannon eases toward target; continuous fire
+    // Cannon eases toward target; fires ONLY while the player is touching/dragging.
+    // The cooldown charges (max 1 shot) while idle, so a tap fires at once but tapping can't beat FIRE_RATE.
     cannonX += (targetX - cannonX) * Math.min(1, dt * 18);
-    if (autoFire) {
-      fireAcc += dt * FIRE_RATE;
+    fireAcc += dt * FIRE_RATE;
+    if (dragging && autoFire) {
       while (fireAcc >= 1) {
         fireAcc -= 1;
         if ((fireCount++ % 3) === 0) sfxPop();       // every 3rd shot to keep audio light
         spawnMob(cannonX, CANNON_Y - 18, (Math.random() - 0.5) * 2 * SPREAD, -MOB_SPEED, 0);
       }
+    } else if (fireAcc > 1) {
+      fireAcc = 1;
     }
 
     // Opponent spawner
@@ -449,14 +462,15 @@
     blueN = bN;
     blueCX = bN > 0 ? bSum / bN : W / 2;
 
-    // Red mobs march down, drifting toward the blue mass
+    // Red mobs march down. The whole red mass drifts toward the blue mass as one body
+    // (shared velocity from the centroid offset) so walls keep their shape instead of collapsing to a column.
     var rdy = redSpeed * dt;
+    var v = 0;
+    if (blueN > 0 && redCount > 0) {
+      v = (blueCX - redCX) * RED_ATTRACT;
+      v = v > RED_ATTRACT_MAX ? RED_ATTRACT_MAX : (v < -RED_ATTRACT_MAX ? -RED_ATTRACT_MAX : v);
+    }
     for (i = 0; i < redCount; i++) {
-      var v = 0;
-      if (blueN > 0) {
-        v = (blueCX - rx[i]) * RED_ATTRACT;
-        v = v > RED_ATTRACT_MAX ? RED_ATTRACT_MAX : (v < -RED_ATTRACT_MAX ? -RED_ATTRACT_MAX : v);
-      }
       rvx[i] = v;
       var nx = rx[i] + v * dt;
       rx[i] = nx < RED_R ? RED_R : (nx > W - RED_R ? W - RED_R : nx);
@@ -686,6 +700,7 @@
                  redX: Array.prototype.slice.call(rx, 0, redCount), blueX: Array.prototype.slice.call(mx, 0, mobCount) };
       },
       aim: function (x) { targetX = x; cannonX = x; },
+      touch: function (b) { dragging = !!b; },
       spawnBlue: function (x, y, vx, vy, mask) { return spawnMob(x, y, vx, vy, mask || 0); },
       spawnRed: spawnRed,
       setFlags: function (f) { if ('fire' in f) autoFire = f.fire; if ('spawner' in f) spawnerOn = f.spawner; }
