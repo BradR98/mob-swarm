@@ -4,7 +4,7 @@ _Last updated: 2026-10-05_
 
 | Field | Value |
 |-------|-------|
-| **Current Phase** | Phase 2 core delivered (moving gates, red mobs, defeat); pending device testing |
+| **Current Phase** | Phase 3 delivered (cannon shield, funneling, 3 levels, audio); pending device playtest and balance pass |
 | **Active Focus** | Validate Phase 1 `index.html` on real phones; begin Phase 2 lane flow |
 | **Known Blockers** | None |
 
@@ -21,6 +21,9 @@ _Last updated: 2026-10-05_
 - [x] Repo initialized, default branch `main`
 - [x] Docs created (README, BACKLOG, CHANGELOG, PROJECT_STATUS)
 - [x] `index.html` JS passes syntax check and headless logic test
+- [x] Headless suite: 28 checks (gates, collisions, shield, funnel, levels)
+- [ ] Audio verified on a real device (iOS needs a first tap to unlock)
+- [ ] Balance playtest of levels 1-3 on a phone
 - [ ] Manual test on iOS Safari
 - [ ] Manual test on Android Chrome
 - [ ] Sustained 60 FPS confirmed with 500+ active mobs

@@ -39,6 +39,13 @@
     box-shadow: 0 6px 0 #124a9c, 0 10px 24px rgba(0,0,0,.5);
   }
   #overlay button:active { transform: translateY(4px); box-shadow: 0 2px 0 #124a9c; }
+  #mute {
+    position: absolute; top: 8px; right: 10px; z-index: 5;
+    width: 36px; height: 36px; padding: 0; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,.25); background: rgba(20,30,60,.7);
+    color: #fff; font-size: 18px; line-height: 34px; text-align: center; cursor: pointer;
+  }
+  #mute:active { transform: scale(.92); }
   @keyframes pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 </style>
 </head>
@@ -48,8 +55,9 @@
     <canvas id="game"></canvas>
     <div id="overlay">
       <h1 id="overlayTitle">Victory!</h1>
-      <button id="restart" type="button">Restart</button>
+      <button id="restart" type="button">Next Level</button>
     </div>
+    <button id="mute" type="button" aria-label="Mute audio" title="Mute / unmute">&#128266;</button>
   </div>
 </div>
 
@@ -63,34 +71,43 @@
   var MAX_RED = 500;             // red pool capacity
   var MOB_R = 4, RED_R = 7;
   var MOB_SPEED = 250;           // px/s upward (blue)
-  var RED_SPEED = MOB_SPEED * 0.75;   // px/s downward (red)
+  var RED_SPEED_BASE = MOB_SPEED * 0.75;   // px/s downward (red); scaled per level
   var FIRE_RATE = 9;             // shots/s
   var SPREAD = 14;               // px/s sideways jitter at fire
-  var BASE_MAX_HP = 50;
-  var BASE_Y = 24, BASE_H = 64;  // base rect top / height
+  var BASE_Y = 52, BASE_H = 64;  // base rect top / height (HUD lives above)
   var BASE_BOTTOM = BASE_Y + BASE_H;
   var CANNON_Y = H - 56;
+  var CANNON_MAX_HP = 5;
   var MAX_DT = 1 / 20;           // clamp huge frame gaps
-  var RED_INTERVAL = 1.4;        // avg seconds between red spawns
   var HIT_R2 = (MOB_R + RED_R) * (MOB_R + RED_R);
+  var FUNNEL = 0.7;              // 0 = waves from center, 1 = exactly over the blue cluster
+  var RED_ATTRACT = 0.8, RED_ATTRACT_MAX = 45;      // red lateral pull toward blue mass
+  var BLUE_ATTRACT = 0.5, BLUE_ATTRACT_MAX = 70;    // blue lateral accel toward red mass
 
   var PLAYING = 0, WON = 1, LOST = 2;
 
-  // Gates: type 'x' multiplies (adds n-1 clones), '+' adds n clones.
-  // They slide horizontally between [min, max] and bounce. Different y so they never overlap.
-  function makeGate(w, y, type, n, label, startRight, speed) {
-    var min = 10, max = W - 10 - w;
-    return {
-      w: w, y: y, h: 26, type: type, n: n, label: label,
-      min: min, max: max, speed: speed, startRight: startRight,
-      x: startRight ? max : min, vx: startRight ? -speed : speed
-    };
-  }
-  var GATES = [
-    makeGate(130, 360, 'x', 2, 'x2', false, 70),   // left -> right
-    makeGate(110, 280, '+', 5, '+5', true, 90)     // right -> left
+  // ---------- Levels ----------
+  // gates: [width, y, type, n, label, startRight, speed]
+  var LEVELS = [
+    { baseHP: 40,  redInterval: 3.0, wave: 1, redSpeedMul: 1.0,
+      gates: [[130, 360, 'x', 2, 'x2', false, 60]] },
+    { baseHP: 80,  redInterval: 1.9, wave: 2, redSpeedMul: 1.0,
+      gates: [[130, 360, 'x', 2, 'x2', false, 80], [110, 280, '+', 5, '+5', true, 100]] },
+    { baseHP: 150, redInterval: 1.1, wave: 3, redSpeedMul: 1.15,
+      gates: [[110, 360, 'x', 2, 'x2', false, 190], [90, 280, '+', 5, '+5', true, 230]] }
   ];
-  var GATE_COUNT = GATES.length;
+  var MAX_GATES = 2;
+
+  // Gate objects are pre-allocated and reconfigured per level. They slide between [min, max] and bounce.
+  var GATES = [{}, {}];
+  var gateCount = 0;
+  function cfgGate(G, d) {
+    G.w = d[0]; G.y = d[1]; G.h = 26; G.type = d[2]; G.n = d[3]; G.label = d[4];
+    G.startRight = d[5]; G.speed = d[6];
+    G.min = 10; G.max = W - 10 - G.w;
+    G.x = G.startRight ? G.max : G.min;
+    G.vx = G.startRight ? -G.speed : G.speed;
+  }
 
   // ---------- Blue mob pool: pre-allocated parallel typed arrays ----------
   var mx = new Float32Array(MAX_MOBS);
@@ -117,12 +134,13 @@
   // ---------- Red mob pool ----------
   var rx = new Float32Array(MAX_RED);
   var ry = new Float32Array(MAX_RED);
+  var rvx = new Float32Array(MAX_RED);
   var rdead = new Uint8Array(MAX_RED);
   var redCount = 0;
   function spawnRed(x, y) {
     if (redCount >= MAX_RED) return false;
     var i = redCount++;
-    rx[i] = x; ry[i] = y; rdead[i] = 0;
+    rx[i] = x; ry[i] = y; rvx[i] = 0; rdead[i] = 0;
     return true;
   }
 
@@ -142,14 +160,76 @@
     popHead = (popHead + 1) % POP_MAX;
   }
 
+  // ---------- Audio: Web Audio synthesis, zero assets, lazily created on first gesture ----------
+  var AC = (typeof window !== 'undefined') && (window.AudioContext || window.webkitAudioContext);
+  var actx = null, master = null, noiseBuf = null;
+  var muted = false;
+  try { muted = localStorage.getItem('mobswarm_muted') === '1'; } catch (_) {}
+  var clock = 0;                                   // game-time seconds (drives sound throttling)
+  var lastGateSfx = -1, lastHitSfx = -1;
+
+  function initAudio() {
+    if (!AC) return;
+    if (actx) { if (actx.state === 'suspended') actx.resume(); return; }
+    try {
+      actx = new AC();
+      master = actx.createGain();
+      master.gain.value = 0.5;
+      master.connect(actx.destination);
+      var n = (actx.sampleRate * 0.15) | 0;
+      noiseBuf = actx.createBuffer(1, n, actx.sampleRate);
+      var d = noiseBuf.getChannelData(0);
+      for (var i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    } catch (_) { actx = null; }
+  }
+  function tone(f0, f1, dur, type, vol, delay) {
+    if (!actx || muted) return;
+    var t = actx.currentTime + (delay || 0);
+    var o = actx.createOscillator(), g = actx.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(f0, t);
+    o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(master);
+    o.start(t); o.stop(t + dur + 0.02);
+  }
+  function noise(dur, ftype, freq, vol) {
+    if (!actx || muted) return;
+    var t = actx.currentTime;
+    var s = actx.createBufferSource(), f = actx.createBiquadFilter(), g = actx.createGain();
+    s.buffer = noiseBuf;
+    f.type = ftype; f.frequency.value = freq;
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    s.connect(f); f.connect(g); g.connect(master);
+    s.start(t); s.stop(t + dur + 0.02);
+  }
+  function sfxPop()  { noise(0.05, 'lowpass', 700, 0.12); }                       // cannon: soft low-passed pop
+  function sfxGate() {                                                           // rising chime
+    if (clock - lastGateSfx < 0.06) return; lastGateSfx = clock;
+    tone(520, 1040, 0.14, 'triangle', 0.12);
+  }
+  function sfxHit() {                                                            // muted click/crunch
+    if (clock - lastHitSfx < 0.04) return; lastHitSfx = clock;
+    noise(0.025, 'bandpass', 1400, 0.07);
+  }
+  function sfxCannonHit() { tone(160, 60, 0.18, 'sawtooth', 0.15); noise(0.12, 'lowpass', 400, 0.15); }
+  function sfxWin()  { var f = [523, 659, 784, 1047]; for (var i = 0; i < 4; i++) tone(f[i], f[i] * 1.01, 0.22, 'triangle', 0.15, i * 0.12); }
+  function sfxLose() { var f = [392, 330, 262, 196]; for (var i = 0; i < 4; i++) tone(f[i], f[i] * 0.97, 0.3, 'sawtooth', 0.1, i * 0.18); }
+
   // ---------- State ----------
   var state = PLAYING;
-  var baseHP = BASE_MAX_HP;
+  var level = 0;
+  var baseMaxHP = 40, baseHP = 40;
+  var cannonHP = CANNON_MAX_HP;
+  var redInterval = 3, waveSize = 1, redSpeed = RED_SPEED_BASE;
   var cannonX = W / 2, targetX = W / 2;
-  var fireAcc = 0;
+  var fireAcc = 0, fireCount = 0;
   var redTimer = 1.5;
-  var hitFlash = 0;
-  var gateFlash = new Float32Array(GATE_COUNT);
+  var hitFlash = 0, cannonFlash = 0;
+  var gateFlash = new Float32Array(MAX_GATES);
+  var blueCX = W / 2, blueN = 0;           // blue centroid from previous frame
   var autoFire = true, spawnerOn = true;   // toggled only by debug hooks
 
   var canvas = document.getElementById('game');
@@ -158,7 +238,19 @@
   var overlay = document.getElementById('overlay');
   var overlayTitle = document.getElementById('overlayTitle');
   var restartBtn = document.getElementById('restart');
+  var muteBtn = document.getElementById('mute');
   var scale = 1;
+
+  function syncMuteBtn() {
+    muteBtn.textContent = muted ? '\uD83D\uDD07' : '\uD83D\uDD0A';
+    muteBtn.setAttribute('aria-label', muted ? 'Unmute audio' : 'Mute audio');
+  }
+  muteBtn.addEventListener('click', function () {
+    initAudio();
+    muted = !muted;
+    try { localStorage.setItem('mobswarm_muted', muted ? '1' : '0'); } catch (_) {}
+    syncMuteBtn();
+  });
 
   // ---------- Responsive scaling ----------
   function resize() {
@@ -183,6 +275,7 @@
   }
   var dragging = false;
   canvas.addEventListener('pointerdown', function (e) {
+    initAudio();
     dragging = true;
     targetX = pointerToLogicalX(e);
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
@@ -199,19 +292,23 @@
   document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
   // ---------- Game logic ----------
+  // Loads the current `level` and restarts it.
   function reset() {
+    var L = LEVELS[level];
     mobCount = 0; redCount = 0;
-    baseHP = BASE_MAX_HP;
+    baseMaxHP = L.baseHP; baseHP = baseMaxHP;
+    cannonHP = CANNON_MAX_HP;
+    redInterval = L.redInterval; waveSize = L.wave; redSpeed = RED_SPEED_BASE * L.redSpeedMul;
     state = PLAYING;
-    fireAcc = 0;
-    redTimer = 1.5;
-    hitFlash = 0;
+    fireAcc = 0; fireCount = 0;
+    redTimer = Math.min(1.5, redInterval);
+    hitFlash = 0; cannonFlash = 0;
+    blueCX = W / 2; blueN = 0;
     for (var p = 0; p < POP_MAX; p++) popLife[p] = 0;
-    for (var g = 0; g < GATE_COUNT; g++) {
-      var G = GATES[g];
+    gateCount = L.gates.length;
+    for (var g = 0; g < MAX_GATES; g++) {
       gateFlash[g] = 0;
-      G.x = G.startRight ? G.max : G.min;
-      G.vx = G.startRight ? -G.speed : G.speed;
+      if (g < gateCount) cfgGate(GATES[g], L.gates[g]);
     }
     overlay.classList.remove('show', 'lose');
   }
@@ -221,11 +318,19 @@
     mobCount = 0; redCount = 0;
     var won = newState === WON;
     overlayTitle.textContent = won ? 'Victory!' : 'Defeat';
-    restartBtn.textContent = won ? 'Restart' : 'Try Again';
+    restartBtn.textContent = won ? (level < LEVELS.length - 1 ? 'Next Level' : 'Victory - Play Again') : 'Try Again';
     overlay.classList.toggle('lose', !won);
     overlay.classList.add('show');
+    if (won) sfxWin(); else sfxLose();
   }
-  restartBtn.addEventListener('click', reset);
+
+  // Button: Next Level after a win (wraps to level 1 after the last), same level after a defeat.
+  function onRestart() {
+    initAudio();
+    if (state === WON) level = (level + 1) % LEVELS.length;
+    reset();
+  }
+  restartBtn.addEventListener('click', onRestart);
   restartBtn.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
 
   // Spawn clones for gate `gi` triggered by blue mob `mobIdx` at (x, y).
@@ -234,6 +339,7 @@
     var extra = gate.type === 'x' ? gate.n - 1 : gate.n;
     var mask = (1 << gi) | mmask[mobIdx];   // clones inherit every gate the parent has passed
     gateFlash[gi] = 1;
+    sfxGate();
     for (var k = 0; k < extra; k++) {
       var dir = (k & 1) ? 1 : -1;           // alternate outward scatter
       var vx = dir * (30 + Math.random() * 70);
@@ -242,12 +348,23 @@
     }
   }
 
+  // Red wave: centered between the map center and the blue cluster (funneling).
+  function spawnWave() {
+    var center = blueN > 0 ? W / 2 + (blueCX - W / 2) * FUNNEL : W / 2;
+    for (var k = 0; k < waveSize; k++) {
+      var x = center + (k - (waveSize - 1) * 0.5) * 20 + (Math.random() - 0.5) * 8;
+      x = x < 24 ? 24 : (x > W - 24 ? W - 24 : x);
+      spawnRed(x, BASE_BOTTOM + RED_R + 1);
+    }
+  }
+
   function update(dt) {
     if (state !== PLAYING) return;
     var i, gi;
+    clock += dt;
 
     // Gates slide and bounce
-    for (gi = 0; gi < GATE_COUNT; gi++) {
+    for (gi = 0; gi < gateCount; gi++) {
       var G = GATES[gi];
       G.x += G.vx * dt;
       if (G.x < G.min) { G.x = G.min; G.vx = Math.abs(G.vx); }
@@ -260,20 +377,30 @@
       fireAcc += dt * FIRE_RATE;
       while (fireAcc >= 1) {
         fireAcc -= 1;
+        if ((fireCount++ % 3) === 0) sfxPop();       // every 3rd shot to keep audio light
         spawnMob(cannonX, CANNON_Y - 18, (Math.random() - 0.5) * 2 * SPREAD, -MOB_SPEED, 0);
       }
     }
 
-    // Opponent spawner: red mobs drop from the base
+    // Opponent spawner
     if (spawnerOn) {
       redTimer -= dt;
       if (redTimer <= 0) {
-        redTimer = RED_INTERVAL * (0.6 + Math.random() * 0.8);
-        spawnRed(30 + Math.random() * (W - 60), BASE_BOTTOM + RED_R + 1);
+        redTimer = redInterval * (0.7 + Math.random() * 0.6);
+        spawnWave();
       }
     }
 
+    // Red centroid (for blue attraction)
+    var redCX = W / 2;
+    if (redCount > 0) {
+      var rs = 0;
+      for (i = 0; i < redCount; i++) rs += rx[i];
+      redCX = rs / redCount;
+    }
+
     // Blue mobs: iterate with live mobCount (clones appended mid-loop carry inherited gate bits)
+    var bSum = 0, bN = 0;
     i = 0;
     while (i < mobCount) {
       var x = mx[i] + mvx[i] * dt;
@@ -281,15 +408,21 @@
       var vx = mvx[i];
       var vy = mvy[i];
 
+      // Lateral pull toward the red mass once clear of the cannon
+      if (redCount > 0 && y < CANNON_Y - 80) {
+        var a = (redCX - x) * BLUE_ATTRACT;
+        vx += (a > BLUE_ATTRACT_MAX ? BLUE_ATTRACT_MAX : (a < -BLUE_ATTRACT_MAX ? -BLUE_ATTRACT_MAX : a)) * dt;
+      }
       if (x < MOB_R) { x = MOB_R; vx = -vx; }
       else if (x > W - MOB_R) { x = W - MOB_R; vx = -vx; }
       vx *= (1 - Math.min(1, dt * 2.5));     // scatter bleeds off
       mvx[i] = vx; mx[i] = x; my[i] = y;
+      bSum += x; bN++;
 
       // Gates: circle-vs-rect overlap while moving up; each gate fires at most once per mob
       if (vy < 0) {
         var m = mmask[i];
-        for (gi = 0; gi < GATE_COUNT; gi++) {
+        for (gi = 0; gi < gateCount; gi++) {
           var bit = 1 << gi;
           if (m & bit) continue;
           var gt = GATES[gi], hh = gt.h * 0.5;
@@ -313,10 +446,22 @@
       }
       i++;
     }
+    blueN = bN;
+    blueCX = bN > 0 ? bSum / bN : W / 2;
 
-    // Red mobs advance downward
-    var rdy = RED_SPEED * dt;
-    for (i = 0; i < redCount; i++) ry[i] += rdy;
+    // Red mobs march down, drifting toward the blue mass
+    var rdy = redSpeed * dt;
+    for (i = 0; i < redCount; i++) {
+      var v = 0;
+      if (blueN > 0) {
+        v = (blueCX - rx[i]) * RED_ATTRACT;
+        v = v > RED_ATTRACT_MAX ? RED_ATTRACT_MAX : (v < -RED_ATTRACT_MAX ? -RED_ATTRACT_MAX : v);
+      }
+      rvx[i] = v;
+      var nx = rx[i] + v * dt;
+      rx[i] = nx < RED_R ? RED_R : (nx > W - RED_R ? W - RED_R : nx);
+      ry[i] += rdy;
+    }
 
     // Blue-vs-red: bucket blues in the grid, each red tests its 3x3 neighbourhood.
     // Kills are only flagged here; compaction happens after, so grid indices stay valid.
@@ -342,6 +487,7 @@
               if (dx * dx + dy * dy <= HIT_R2) {
                 bdead[b] = 1; rdead[r] = 1; killedBlue++; killedRed++;
                 spawnPop((mx[b] + rx[r]) * 0.5, (my[b] + ry[r]) * 0.5);
+                sfxHit();
                 break search;
               }
             }
@@ -362,7 +508,7 @@
         var wr = 0;
         for (i = 0; i < redCount; i++) {
           if (rdead[i]) continue;
-          if (wr !== i) { rx[wr] = rx[i]; ry[wr] = ry[i]; }
+          if (wr !== i) { rx[wr] = rx[i]; ry[wr] = ry[i]; rvx[wr] = rvx[i]; }
           rdead[wr] = 0;
           wr++;
         }
@@ -370,14 +516,28 @@
       }
     }
 
-    // Defeat: any red reaches the cannon line
-    for (i = 0; i < redCount; i++) {
-      if (ry[i] >= CANNON_Y) { endGame(LOST); return; }
+    // Reds crossing the cannon line each deal 1 damage and are recycled
+    var hits = 0;
+    i = 0;
+    while (i < redCount) {
+      if (ry[i] >= CANNON_Y) {
+        spawnPop(rx[i], CANNON_Y);
+        var l = --redCount;
+        if (i !== l) { rx[i] = rx[l]; ry[i] = ry[l]; rvx[i] = rvx[l]; }
+        rdead[i] = 0;
+        hits++;
+      } else i++;
+    }
+    if (hits) {
+      cannonHP -= hits; cannonFlash = 1;
+      sfxCannonHit();
+      if (cannonHP <= 0) { cannonHP = 0; endGame(LOST); return; }
     }
 
     // Effects decay
     if (hitFlash > 0) hitFlash = Math.max(0, hitFlash - dt * 6);
-    for (gi = 0; gi < GATE_COUNT; gi++) if (gateFlash[gi] > 0) gateFlash[gi] = Math.max(0, gateFlash[gi] - dt * 4);
+    if (cannonFlash > 0) cannonFlash = Math.max(0, cannonFlash - dt * 3);
+    for (gi = 0; gi < gateCount; gi++) if (gateFlash[gi] > 0) gateFlash[gi] = Math.max(0, gateFlash[gi] - dt * 4);
     for (i = 0; i < POP_MAX; i++) if (popLife[i] > 0) popLife[i] -= dt * 4;
   }
 
@@ -398,6 +558,14 @@
     ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = '#121a35';
     ctx.fillRect(10, BASE_BOTTOM, W - 20, H - BASE_BOTTOM);
+
+    // HUD: level
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.font = '800 16px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('LEVEL ' + (level + 1) + '/' + LEVELS.length, 14, 26);
+
     // Danger line at the cannon
     ctx.strokeStyle = 'rgba(255,70,90,0.35)';
     ctx.lineWidth = 1;
@@ -414,16 +582,15 @@
     ctx.fillStyle = '#fff';
     ctx.font = '700 28px system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
     ctx.fillText(baseHP + ' HP', W / 2, BASE_Y + BASE_H / 2 - 6);
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
     ctx.fillRect(30, BASE_Y + BASE_H - 14, W - 60, 6);
     ctx.fillStyle = '#7dff9a';
-    ctx.fillRect(30, BASE_Y + BASE_H - 14, (W - 60) * (baseHP / BASE_MAX_HP), 6);
+    ctx.fillRect(30, BASE_Y + BASE_H - 14, (W - 60) * (baseHP / baseMaxHP), 6);
 
     // Gates
     ctx.font = '800 22px system-ui, sans-serif';
-    for (var gi = 0; gi < GATE_COUNT; gi++) {
+    for (var gi = 0; gi < gateCount; gi++) {
       var g = GATES[gi], f = gateFlash[gi];
       var isMul = g.type === 'x';
       ctx.fillStyle = isMul ? 'rgba(60,160,255,' + (0.35 + f * 0.4) + ')' : 'rgba(90,230,140,' + (0.35 + f * 0.4) + ')';
@@ -466,11 +633,11 @@
       ctx.stroke();
     }
 
-    // Cannon
-    ctx.fillStyle = '#2b3a6b';
+    // Cannon (flashes red when hit)
+    ctx.fillStyle = cannonFlash > 0 ? '#ff6a78' : '#2b3a6b';
     roundRect(cannonX - 9, CANNON_Y - 26, 18, 30, 5);
     ctx.fill();
-    ctx.fillStyle = '#4db3ff';
+    ctx.fillStyle = cannonFlash > 0 ? '#ff4d5e' : '#4db3ff';
     ctx.beginPath();
     ctx.arc(cannonX, CANNON_Y + 6, 20, 0, 6.2832);
     ctx.fill();
@@ -478,6 +645,22 @@
     ctx.beginPath();
     ctx.arc(cannonX, CANNON_Y + 6, 7, 0, 6.2832);
     ctx.fill();
+
+    // Cannon HP pips under the cannon
+    var px0 = cannonX < 36 ? 36 : (cannonX > W - 36 ? W - 36 : cannonX);
+    px0 -= (CANNON_MAX_HP - 1) * 6;
+    for (i = 0; i < CANNON_MAX_HP; i++) {
+      ctx.fillStyle = i < cannonHP ? '#ff6a78' : 'rgba(255,255,255,0.15)';
+      ctx.beginPath();
+      ctx.arc(px0 + i * 12, H - 9, 4, 0, 6.2832);
+      ctx.fill();
+    }
+
+    // Screen flash when the cannon is hit
+    if (cannonFlash > 0) {
+      ctx.fillStyle = 'rgba(255,40,60,' + (cannonFlash * 0.28).toFixed(3) + ')';
+      ctx.fillRect(0, 0, W, H);
+    }
   }
 
   // ---------- Main loop ----------
@@ -495,8 +678,13 @@
   // Debug/test hooks: only exposed at index.html#debug
   if (typeof location !== 'undefined' && location.hash === '#debug') {
     window.__mob = {
-      update: update, reset: reset, gates: GATES,
-      get: function () { return { mobCount: mobCount, redCount: redCount, baseHP: baseHP, state: state, capBlue: MAX_MOBS, capRed: MAX_RED }; },
+      update: update, reset: reset, gates: GATES, restart: onRestart,
+      setLevel: function (n) { level = n; reset(); },
+      get: function () {
+        return { mobCount: mobCount, redCount: redCount, baseHP: baseHP, cannonHP: cannonHP, state: state,
+                 level: level, gateCount: gateCount, capBlue: MAX_MOBS, capRed: MAX_RED,
+                 redX: Array.prototype.slice.call(rx, 0, redCount), blueX: Array.prototype.slice.call(mx, 0, mobCount) };
+      },
       aim: function (x) { targetX = x; cannonX = x; },
       spawnBlue: function (x, y, vx, vy, mask) { return spawnMob(x, y, vx, vy, mask || 0); },
       spawnRed: spawnRed,
@@ -504,6 +692,7 @@
     };
   }
 
+  syncMuteBtn();
   resize();
   reset();
   requestAnimationFrame(function (t) { last = t; requestAnimationFrame(frame); });

@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Cannon shield: 5 HP pips, red flash on hit; Defeat only at 0 HP (replaces instant defeat).
+- Red waves funnel toward the blue cluster; red and blue masses attract laterally.
+- 3-level progression (base HP 40/80/150, faster gates and spawns), level HUD, "Next Level" / "Victory - Play Again".
+- Web Audio synthesized SFX (cannon pop, gate chime, collision click, hit thud, win/lose fanfares) and a mute toggle (persisted).
+- Tests for shield, funneling, attraction, level progression.
+
+### Changed
+- Opponent base moved down 28px to make room for the HUD.
+
+### Added
 - Moving gates (sliding, bouncing, opposite directions) with rect-overlap trigger; no dead zones.
 - Red enemy mobs (pool of 500) spawned from the opponent base, moving down at 0.75x blue speed.
 - Blue-vs-red 1:1 cancellation using a zero-allocation spatial grid, with pop effects (pooled ring buffer).

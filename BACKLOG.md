@@ -16,8 +16,8 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done. Suggested model: **Sonnet** =
 
 | ID | Task | Status | Model |
 |----|------|--------|-------|
-| P2-1 | Dynamic lane flow (mobs steer toward base along lanes) | [ ] | Sonnet |
-| P2-2 | Gate math variants (`+N`, `xN`, negative gates `-N`, `/N`) | [ ] | Sonnet |
+| P2-1 | Dynamic lane flow (lateral attraction between red and blue masses) | [x] | Sonnet |
+| P2-2 | Gate math variants (`+N`, `xN` done; negative gates `-N`, `/N` open) | [~] | Sonnet |
 | P2-3 | Collision dynamics: Red vs Blue units (spatial hash grid) | [x] | Pro (design), Sonnet |
 | P2-4 | Per-gate single-pass guard to prevent re-triggering | [x] | Sonnet |
 
@@ -26,15 +26,15 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done. Suggested model: **Sonnet** =
 | ID | Task | Status | Model |
 |----|------|--------|-------|
 | P3-1 | Moving gates (oscillating / sliding) | [x] | Sonnet |
-| P3-2 | Opponent AI spawner (red waves, adaptive rate) | [~] basic fixed-rate spawner done | Pro |
-| P3-3 | Base defense mechanics (turrets, shields, player-base HP and loss state) | [ ] | Pro |
+| P3-2 | Opponent AI spawner (red waves, adaptive rate) | [x] targeted waves (funneled toward blue cluster), per-level rate/size | Pro |
+| P3-3 | Base defense mechanics: cannon shield (5 HP), hit flash, defeat at 0 | [x] | Pro |
 
 ## Phase 4: Progression and Polish
 
 | ID | Task | Status | Model |
 |----|------|--------|-------|
-| P4-1 | Procedural level progression (seeded generator, difficulty curve) | [ ] | Pro/Opus |
-| P4-2 | Audio effects via Web Audio API synthesis (no asset files) | [ ] | Sonnet |
+| P4-1 | Level progression: 3 hand-tuned levels done; procedural generator still open | [~] | Pro/Opus |
+| P4-2 | Audio effects via Web Audio API synthesis (pop, chime, crunch, fanfares, mute toggle) | [x] | Sonnet |
 | P4-3 | Visual polish (particles from pool, screen shake, gradients, haptics) | [ ] | Sonnet |
 
 ## Phase 5: PWA and Battery
