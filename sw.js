@@ -1,8 +1,8 @@
 // Mob Swarm service worker: cache-first for the two app files so the game works offline.
 // Bump CACHE when index.html or manifest.json change so installed clients refresh.
-var CACHE_NAME = 'mob-swarm-v7';   // bump on every release (v2 in the spec was already below the shipped v6)
+var CACHE_NAME = 'mob-swarm-v8';   // bump on every release (v2 in the spec was already below the shipped v6)
 var CACHE = CACHE_NAME;
-var ASSETS = ['./', './index.html', './manifest.json'];
+var ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(ASSETS); }).then(function () { return self.skipWaiting(); }));
