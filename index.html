@@ -10,7 +10,24 @@
 <link rel="manifest" href="manifest.json">
 <script id="sw-register">
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+    var hadController = !!navigator.serviceWorker.controller, reloading = false;
+    // New worker took control -> reload once so the player always runs the latest build
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      if (!hadController || reloading) return;   // first install: nothing stale to replace
+      reloading = true; location.reload();
+    });
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function (reg) {
+        function activate(w) { if (w) w.postMessage('SKIP_WAITING'); }
+        activate(reg.waiting);
+        reg.addEventListener('updatefound', function () {
+          var w = reg.installing;
+          if (w) w.addEventListener('statechange', function () { if (w.state === 'installed' && navigator.serviceWorker.controller) activate(w); });
+        });
+        reg.update();
+        document.addEventListener('visibilitychange', function () { if (!document.hidden) reg.update(); });
+      }).catch(function () {});
+    });
   }
 </script>
 <title>Mob Swarm</title>
