@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 5: procedural 100-level campaign)
+- `generateLevel(n)` replaces the hardcoded levels: seeded PRNG so level N is always the same board. Base HP = 800 + 400n (L1 1,200 ... L100 40,800).
+- Red spawn interval shrinks 2% per level (floor 2.5s); wave size grows +1 (min) / +2 (max) per level, hard-capped at 150 so two walls always fit the 500-red pool. Red speed +0.5%/level (max +50%).
+- Tiered obstacles: L1-10 gates x2/x3/+5/+10; L11-30 add negative gates (`-10`, `/2`) sliding opposite the nearest multiplier; L31-50 add pinball bumpers (gray circles that reflect blues and knock reds back); L51+ add rotating black holes that pull in and destroy blues and reds.
+- Boss every 10 levels: normal waves stop, one giant boss (HP = level x 100, 1 damage per blue impact) marches down the center lane; touching the cannon line is instant defeat. The base is shielded on boss levels; killing the boss wins.
+- HUD shows "LEVEL X / 100" (+ BOSS tag). Next Level regenerates board, pools and gates in place; level 100 shows "Victory - Play Again" and wraps to level 1.
+- Gates: up to 6 per level (mask bit 7 reserved for the bumped/sucked flag). Red pool gained knock-velocity arrays for bumper/black-hole physics.
+- Tests: generator math/determinism/tiers, bumpers, black holes, bosses, level transitions, 150-level soak (67 checks). `test/bot-sim.js` and `test/boss-sim.js` for balance.
+
+### Balance findings (not fixed, see BACKLOG)
+- Base HP 800+400n gives pure-siege clear times of 69s (L1), 62s, 114s (L3), 21s, 61s, 24s (L7), 90s (L9) with perfect aim: the 25-40s target is not met because throughput depends on the random gate mix.
+- Boss: L10 (1,000 HP) is won 20/20 but in ~1s; L20 and L30 are 0/20 at the default boss speed.
+
 ### Added (Phase 4: siege balance)
 - Siege base HP: L1 1,000 / L2 3,500 / L3 10,000. Base strobes and shakes in proportion to hit rate, with a yellow chip-damage trail on the HP bar and thousands-separated HP text.
 - Negative gates (red): `-10` is a tax that destroys up to 10 mobs and recharges at 5/s (charge bar shown); `/2` destroys every second mob. They slide opposite to the multiplier gate below them and play a dissonant tritone buzz. L2 has `-10`; L3 has `/2` and `-10`.

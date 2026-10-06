@@ -1,7 +1,8 @@
+// Boss fairness sim: node test/boss-sim.js  (fire-early vs fire-late, and boss-speed sweeps)
 // Balance sim: node test/bot-sim.js [bossRuns]
 // Idealised bots (predict gate positions perfectly): an UPPER bound on human skill.
 const fs = require('fs'), vm = require('vm'), path = require('path');
-const src = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
+const src = fs.readFileSync(require('path').join(__dirname,'..','index.html'), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
 const noop = () => {}; const ctx = new Proxy({}, { get: (t, k) => k in t ? t[k] : noop, set: (t, k, v) => (t[k] = v, true) });
 const els = {}; const el = () => ({ style: {}, classList: { add: noop, remove: noop, toggle: noop }, addEventListener: noop, setAttribute: noop, getContext: () => ctx, getBoundingClientRect: () => ({ left: 0, top: 0, width: 360, height: 640 }) });
 const sb = { document: { getElementById: id => els[id] || (els[id] = el()), addEventListener: noop }, window: { innerWidth: 360, innerHeight: 640, devicePixelRatio: 2, addEventListener: noop }, location: { hash: '#debug' }, performance: { now: () => 0 }, requestAnimationFrame: noop, Math, Float32Array, Uint8Array, Int16Array, Array, JSON };
@@ -36,21 +37,23 @@ function play(n, { spawner = true, cap = 600 } = {}) {
 }
 const avg = a => a.reduce((s, v) => s + v, 0) / a.length;
 
-console.log('--- 1. pure siege time (no reds, perfect aim): is 800+400n really 25-40s? ---');
-for (const n of [1, 2, 3, 4, 5, 7, 9]) {
-  const r = [0, 1, 2].map(() => play(n, { spawner: false }));
-  console.log('L' + n, 'base ' + (800 + 400 * n) + ' HP -> clear', avg(r.map(x => x.secs)).toFixed(0) + 's');
-}
 
-console.log('--- 2. normal levels with red walls (perfect aim, 10 runs each) ---');
-for (const n of [1, 2, 3, 5]) {
-  const r = []; for (let i = 0; i < 10; i++) r.push(play(n));
-  console.log('L' + n, 'win ' + r.filter(x => x.won).length + '/10', 'avg ' + avg(r.map(x => x.secs)).toFixed(0) + 's', 'peak reds ' + Math.max(...r.map(x => x.peakR)), 'worst cannon HP ' + Math.min(...r.map(x => x.minCannon)));
+function playBoss(n,{holdUntilBoss=true,speed=null}={}){
+  g.setLevel(n); g.setFlags({fire:true,spawner:true}); g.touch(!holdUntilBoss);
+  if(speed!=null) g.setBossSpeed(speed);
+  let t=0,spawnT=null;
+  while(g.get().state===0&&t<60*120){
+    const q=g.get();
+    if(q.bossActive&&spawnT===null){spawnT=t;g.touch(true);}
+    if(t%6===0)g.aim(Math.max(16,Math.min(344,smartAim(q))));
+    g.update(1/60);t++;
+  }
+  return {won:g.get().state===1,fight:spawnT===null?0:(t-spawnT)/60};
 }
-
-const N = +process.argv[2] || 20;
-console.log('--- 3. boss levels (perfect aim, ' + N + ' runs each) ---');
-for (const n of [10, 20, 30]) {
-  const r = []; for (let i = 0; i < N; i++) r.push(play(n));
-  console.log('L' + n + ' boss ' + (n * 100) + ' HP', 'win ' + r.filter(x => x.won).length + '/' + N, 'avg ' + avg(r.map(x => x.secs)).toFixed(1) + 's', 'peak blues ' + Math.max(...r.map(x => x.maxMobs)));
-}
+const N=20;
+function row(label,n,opts){const r=[];for(let i=0;i<N;i++)r.push(playBoss(n,opts));
+  console.log(label.padEnd(34),'win',r.filter(x=>x.won).length+'/'+N,'avg fight',avg(r.map(x=>x.fight)).toFixed(1)+'s');}
+console.log('boss speed default = '+(187.5*0.22).toFixed(0)+' px/s');
+for(const n of [10,20,30]) row('L'+n+' fire only once boss appears',n,{holdUntilBoss:true});
+for(const n of [10,20,30]) row('L'+n+' pre-loaded swarm (fire early)',n,{holdUntilBoss:false});
+for(const sp of [30,22,16]) for(const n of [20,30]) row('L'+n+' fair fight, boss '+sp+' px/s',n,{holdUntilBoss:true,speed:sp});

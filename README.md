@@ -12,6 +12,10 @@ No ads. No tracking. No dependencies.
 - **Logical resolution scaling**: the game simulates in a fixed portrait coordinate space (e.g. 360x640) and scales to the viewport, with DPR capped for performance.
 - **Unified pointer input** (Pointer Events) for touch and mouse.
 
+## Campaign
+
+100 procedurally generated levels (seeded, so each level is always the same). Obstacles unlock in tiers: multiplier gates, then negative gates (11+), pinball bumpers (31+) and black holes (51+). Every 10th level is a boss fight.
+
 ## Run Locally
 
 Any static server works:

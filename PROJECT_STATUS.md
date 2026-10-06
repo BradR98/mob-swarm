@@ -4,7 +4,7 @@ _Last updated: 2026-10-05_
 
 | Field | Value |
 |-------|-------|
-| **Current Phase** | Phase 4 delivered (siege HP, negative gates, red shield); Phase 5 (100-level procedural) awaiting decisions |
+| **Current Phase** | Phase 5 delivered (100-level procedural campaign, bosses, bumpers, black holes); balance tuning outstanding |
 | **Active Focus** | Validate Phase 1 `index.html` on real phones; begin Phase 2 lane flow |
 | **Known Blockers** | None |
 
@@ -29,10 +29,10 @@ _Last updated: 2026-10-05_
 - [ ] Sustained 60 FPS confirmed with 500+ active mobs
 - [ ] Remote pushed to GitHub (requires valid `gh` auth)
 
-## Open decisions (blocking Phase 5)
-- Phase 5 asks for Base HP = 1000 + level*1250 (level 1 = 2,250), which conflicts with Phase 4's 1,000 / 3,500 / 10,000.
-- Measured clear times are much longer than the 25-40s target (L3 ~167s with perfect aim).
-- Boss/bumper/black-hole specs need a defined HP curve and pool budget first.
+## Open decisions
+- Boss tuning: L10 is trivial (~1s), L20+ unwinnable at default speed. Options: slower boss, boss spawning above the gate field only, or throughput-aware boss HP.
+- Base HP: 800+400n ignores gate throughput; clear times range 21-114s on L1-L9.
+- Hand off to Gemini Pro with the output of `node test/bot-sim.js` and `node test/boss-sim.js`.
 
 ## Handoff Notes
 

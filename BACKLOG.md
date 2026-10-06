@@ -33,7 +33,7 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done. Suggested model: **Sonnet** =
 
 | ID | Task | Status | Model |
 |----|------|--------|-------|
-| P4-1 | Level progression: 3 hand-tuned levels done; procedural generator still open | [~] | Pro/Opus |
+| P4-1 | Procedural level generator (seeded, levels 1-100+) | [x] | Pro/Opus |
 | P4-2 | Audio effects via Web Audio API synthesis (pop, chime, crunch, fanfares, mute toggle) | [x] | Sonnet |
 | P4-3 | Visual polish (particles from pool, screen shake, gradients, haptics) | [ ] | Sonnet |
 
@@ -46,14 +46,21 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done. Suggested model: **Sonnet** =
 | P5-3 | Frame-rate / battery throttling modes (60/30 FPS, pause on hidden, reduced effects) | [ ] | Sonnet |
 
 ## Phase 4 (delivered): Siege Balance
-- [x] Siege base HP (1,000 / 3,500 / 10,000) with damage flicker + chip-damage trail
 - [x] Negative gates (`-10`, `/2`), red, sliding opposite the multiplier below, dissonant SFX
 - [x] Red shield: 2 blue hits per red (orange when wounded)
-- [ ] **Re-tune base HP**: L3 takes ~167s of perfect aim (target was 25-40s); see CHANGELOG / bot-sim
+- [x] Base damage flicker + chip-damage trail
 
-## Phase 5 (NOT STARTED): 100-level procedural campaign
-- [ ] `generateLevel(n)`, obstacle unlocks (negatives 11+, bumpers 31+, black holes 51+), boss every 10 levels
-- [ ] Blocked on: base HP formula decision (see PROJECT_STATUS)
+## Phase 5 (delivered): Procedural 100-level campaign
+- [x] `generateLevel(n)`: seeded, deterministic; Base HP = 800 + 400n
+- [x] Red spawn interval -2%/level (floor 2.5s); waves +1 min / +2 max per level, capped at 150 (pool-safe)
+- [x] Tiered obstacles: 1-10 basic gates, 11-30 negatives, 31-50 pinball bumpers, 51+ black holes
+- [x] Boss every 10 levels (HP = level * 100), shielded base, instant defeat at the cannon line
+- [x] HUD "LEVEL X / 100"; Next Level regenerates the board in place; wrap after level 100
+
+## Open balance work (from bot sims)
+- [ ] Boss cliff: L10 melts in ~1s, L20/L30 unwinnable even for perfect aim (boss sits in the gate field and shadows upper gates)
+- [ ] Siege time varies 21-114s across L1-L9 because throughput depends on the random gate mix, not on n
+- [ ] Level 3 style single-gate levels vs 4-gate levels need throughput-aware base HP
 
 ## Model Handoff and Limits Plan
 
