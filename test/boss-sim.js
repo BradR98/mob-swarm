@@ -14,7 +14,7 @@ function predict(G, t) { const span = G.max - G.min; if (span <= 0) return G.x; 
 function smartAim(q) {                       // terrain-aware: traces where a shot launched at x really crosses each gate row
   let best = 180, bs = -1;
   const ys = []; for (let gi = 0; gi < q.gateCount; gi++) ys.push(g.gates[gi].y);
-  const bossT = q.isBoss && q.bossActive; if (bossT) ys.push(132);      // also aim the stream at the boss hull
+  const bossT = q.isBoss && q.bossActive; if (bossT) ys.push(108);      // also aim the stream at the boss hull
   for (let x = 20; x <= 340; x += 6) {
     let sc = 1;
     const tr = g.traceBlue(x, ys);

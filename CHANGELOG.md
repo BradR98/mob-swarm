@@ -99,3 +99,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [Unreleased]: https://github.com/BradR98/mob-swarm/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/BradR98/mob-swarm/releases/tag/v0.1.0
+
+## Phase 9 - Trackpad zone, thumb cannon, entity scale, boss rebalance
+- Bottom 15% (y >= 544) is a Trackpad Zone: nothing spawns, enters or renders there. Cannon line (`CANNON_Y`) sits on its border; touch works anywhere on the canvas (X-only mapping).
+- Cannon redrawn as an upward crescent cradling a thumb glow.
+- Global entity scale `ES = 0.82` (mobs, reds, gates, crates, pills, boss, terrain, bumpers, holes); gate rows re-spaced.
+- Boss rebalance: waves 3-12 reds (0.35 x 0.4 of level wave), interval 16-24 s, pipe 7 reds/s (level pipe 14/s).
+- Sim (idealised bot that never shoots reds, N=20, full fight): L10 20/20, L20 18/20 (was 2/10 and 1/10 before tuning). Pure boss TTK is 57 s (L10) / 86 s (L20) vs the 45 s target - not recalibrated.
+- Headless: 131 PASS / 0 FAIL (trackpad boundary, render arcs, scale, boss pacing, input checks).

@@ -43,3 +43,6 @@ Terrain-aware perfect-aim bot, no reds (`node test/bot-sim.js 2`): base TTK L1 3
 Full fights with red waves and crates active, bot never fights reds: L1 2/2, L6 2/2, L50 2/2 (base levels); boss levels are weak (boss-sim 3 runs, before the last funnel fix: L10 0/3, L20 0/3, L30 1/3, L50 1/3). Reds now arrive as one dense stream down a single lane; the bot does not target it, so these are a floor for humans, but boss full-fight balance needs a pass (smaller boss waves or a slower pipe rate).
 Known gaps: HP model is still a global fit; terrain (lane displacement) and obstacle layout cause +/-50% TTK spread. A launch-lane reachability check exists as a debug probe (`traceBlue`); every generated level has >=3 lanes reaching the base area.
 Still unverified on a real device (touch, audio, FPS, PWA install). Supply-crate pill catch and terrain feel need a real playtest.
+
+## Phase 9 status
+Trackpad zone, crescent cannon, 0.82 entity scale and boss rebalance done; headless 131/0; boss full-fight sim L10 20/20, L20 18/20 (bot ignores reds). Open: boss pure TTK exceeds 45 s target (57 s/86 s), base-level TTK not re-simmed after scaling. Needs real-device check: thumb ergonomics, crescent look, touch in zone, FPS.

@@ -4,7 +4,8 @@ const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const src = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 
 const noop = () => {};
-const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : noop), set: (t, k, v) => (t[k] = v, true) });
+let rec = null;
+const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : (rec && k === 'arc' ? (x, y, r) => rec.push(y + r) : noop)), set: (t, k, v) => (t[k] = v, true) });
 const els = {};
 const el = () => ({ style: {}, classList: { add: noop, remove: noop, toggle: noop }, addEventListener: noop,
   setAttribute: noop, getContext: () => ctx, getBoundingClientRect: () => ({ left: 0, top: 0, width: 360, height: 640 }) });
@@ -63,9 +64,9 @@ ok(JSON.stringify(gl(37)) === JSON.stringify(gl(37)) && JSON.stringify(gl(37)) !
     if (n <= 10 && !L.gates.every(d => ['x2', 'x3', '+2', '+10'].includes(d[4]))) { tierOK = false; why = 'labels ' + n; }
     if ((n % 10 === 0) !== L.isBoss || L.bossHP !== (L.isBoss ? Math.round(L.throughput * 45) : 0)) { bossOK = false; why = 'boss ' + n; }
     L.gates.forEach((d, i) => {                           // negative gates guard the next gate up and slide opposite it
-      if (!isNeg(d[2])) { if (d[2] === 'x' && d[3] === 3 || d[2] === '+' && d[3] === 10) { if (!(d[0] <= 75)) layoutOK = false; } else if (!(d[0] >= 95)) layoutOK = false; return; }
+      if (!isNeg(d[2])) { if (d[2] === 'x' && d[3] === 3 || d[2] === '+' && d[3] === 10) { if (!(d[0] <= 63)) layoutOK = false; } else if (!(d[0] >= 74)) layoutOK = false; return; }
       const up = L.gates[i + 1];
-      if (!up || isNeg(up[2]) || !(up[3] === 3 || up[3] === 10) || up[1] !== d[1] - 40 || d[0] < 100) layoutOK = false;
+      if (!up || isNeg(up[2]) || !(up[3] === 3 || up[3] === 10) || up[1] !== d[1] - 38 || d[0] < 80) layoutOK = false;
       else if (d[5] === up[5]) oppOK = false;
     });
     for (let q = 1; q < L.gates.length; q++) if (L.gates[q][1] > L.gates[q - 1][1]) layoutOK = false;
@@ -76,7 +77,7 @@ ok(JSON.stringify(gl(37)) === JSON.stringify(gl(37)) && JSON.stringify(gl(37)) !
   ok(tierOK, 'obstacle tiers: 1-10 basic, 11-30 +negatives, 31-50 +bumpers, 51+ +black holes ' + why);
   ok(bossOK, 'bosses only on multiples of 10 (HP from throughput * 45)');
   ok(oppOK, 'negative gates always slide opposite the high-reward gate they guard');
-  ok(layoutOK, 'risk vs reward: x3/+10 narrow (<=75px) and high, x2/+2 wide (>=95px) and low, negatives wide and directly below a high gate');
+  ok(layoutOK, 'risk vs reward: x3/+10 narrow (<=63px) and high, x2/+2 wide (>=74px) and low, negatives wide and directly below a high gate');
   ok(waveOK, 'wave sizes capped at ' + g.MAX_WAVE + ' (two walls always fit the 500 pool) for levels 1-150');
   ok(intervalOK && gl(6).redInterval < gl(1).redInterval && gl(40).redInterval < gl(20).redInterval && gl(1).redInterval === gl(5).redInterval, 'red spawn interval shrinks per tier and is constant within a tier');
   ok(boundsOK, 'bumpers never overlap gate rows');
@@ -139,13 +140,13 @@ step(g, 30);
 
 // ---------- Cannon shield ----------
 lvl(1);
-g.spawnRed(60, 583);
+g.spawnRed(60, g.CANNON_Y - 7);
 step(g, 3);
 let s = g.get();
 ok(s.cannonHP === 4 && s.redCount === 0 && s.state === 0, 'red hit: cannonHP 5->' + s.cannonHP + ', red recycled, still playing');
-for (let i = 0; i < 3; i++) { g.spawnRed(60, 583); step(g, 2); }
+for (let i = 0; i < 3; i++) { g.spawnRed(60, g.CANNON_Y - 7); step(g, 2); }
 ok(g.get().cannonHP === 1 && g.get().state === 0, 'cannonHP 1 still alive');
-g.spawnRed(60, 583); step(g, 2);
+g.spawnRed(60, g.CANNON_Y - 7); step(g, 2);
 ok(g.get().cannonHP === 0 && g.get().state === 2, 'defeat only at cannonHP 0');
 ok(els.restart.textContent === 'Try Again', 'defeat button reads Try Again');
 g.restart();
@@ -170,7 +171,7 @@ step(g, 40);
 ok(g.get().redX[0] - 100 > 10, 'red drifts toward blue mass (+' + (g.get().redX[0] - 100).toFixed(1) + 'px)');
 lvl(1);
 g.spawnRed(280, 200);
-g.spawnBlue(100, 500, 0, -1, 0);
+g.spawnBlue(100, 440, 0, -1, 0);
 step(g, 40);
 ok(g.get().blueX[0] > 105, 'blue drifts toward red mass (x ' + g.get().blueX[0].toFixed(1) + ')');
 
@@ -234,23 +235,23 @@ ok(Math.abs(g.get().blueX[0] - 240) > 0.2 || Math.abs(g.get().blueY[0] - 300) > 
 lvl(10); g.setFlags({ fire: false, spawner: true });
 guard = 0; while (!g.get().bossActive && guard++ < 60 * 10) g.update(1 / 60);
 ok(g.get().isBoss && g.get().bossActive && g.get().bossHP === gl(10).bossHP, 'L10 boss spawns with throughput*45 = ' + g.get().bossHP + ' HP');
-ok(Math.abs(g.get().bossY - 100) < 1, 'boss hovers at the base line (y ' + g.get().bossY.toFixed(0) + ')');
+ok(Math.abs(g.get().bossY - 95) < 1, 'boss hovers at the base line (y ' + g.get().bossY.toFixed(0) + ')');
 { let xmin = 1e9, xmax = -1e9, yDrift = 0, waves = 0, lastR = 0, peakWave = 0;
   g.setFlags({ fire: false, spawner: true });
-  for (let i = 0; i < 60 * 40 && g.get().state === 0; i++) {
+  for (let i = 0; i < 60 * 70 && g.get().state === 0; i++) {
     g.update(1 / 60); const q = g.get();
-    xmin = Math.min(xmin, q.bossX); xmax = Math.max(xmax, q.bossX); yDrift = Math.max(yDrift, Math.abs(q.bossY - 100));
-    const tot = q.redCount + q.waveQueue; if (tot > lastR + 5) { waves++; peakWave = Math.max(peakWave, tot - lastR); } lastR = tot;
+    xmin = Math.min(xmin, q.bossX); xmax = Math.max(xmax, q.bossX); yDrift = Math.max(yDrift, Math.abs(q.bossY - 95));
+    const tot = q.redCount + q.waveQueue; if (tot > lastR + 1) { waves++; peakWave = Math.max(peakWave, tot - lastR); } lastR = tot;
     if (q.state !== 0) break;
   }
   ok(xmax - xmin > 60 && yDrift < 1, 'boss slowly drifts left/right (x ' + xmin.toFixed(0) + '..' + xmax.toFixed(0) + ') and never marches down');
-  ok(waves >= 1 && peakWave >= 5 && peakWave <= 14, 'boss fires sparse (<=14) red waves while drifting (' + waves + ' waves, biggest ' + peakWave + ')'); }
+  ok(waves >= 1 && peakWave >= 3 && peakWave <= 12 && peakWave < gl(10).waveMin, 'boss fires small (<=12, below the level wave size) red waves while drifting (' + waves + ' waves, biggest ' + peakWave + ')'); }
 lvl(10); g.setFlags({ fire: false, spawner: true });
 guard = 0; while (!g.get().bossActive && guard++ < 60 * 10) g.update(1 / 60);
 step(g, 60 * 2);
 ok(g.get().redCount === 0 || g.get().bossActive, 'boss stays above the gate field (no marching)');
 g.setFlags({ fire: false, spawner: false });
-{ const hp0 = g.get().bossHP; g.spawnBlue(g.get().bossX, g.get().bossY + 60, 0, -250, 0); step(g, 8);
+{ const hp0 = g.get().bossHP; g.spawnBlue(g.get().bossX, g.get().bossY + 45, 0, -250, 0); step(g, 8);
   ok(g.get().bossHP === hp0 - 1 && g.get().mobCount === 0, 'one blue impact = 1 boss damage (' + hp0 + ' -> ' + g.get().bossHP + ')'); }
 lvl(10); g.setFlags({ fire: false, spawner: true });
 t = 0; while (g.get().state === 0 && t < 60 * 120) { g.update(1 / 60); t++; }
@@ -262,16 +263,16 @@ lvl(20); g.setFlags({ fire: false, spawner: true });
 guard = 0; while (!g.get().bossActive && guard++ < 60 * 10) g.update(1 / 60);
 ok(g.get().bossHP === gl(20).bossHP, 'L20 boss HP = throughput*45 = ' + g.get().bossHP);
 g.setFlags({ fire: false, spawner: false }); g.setBossHP(1);
-g.spawnBlue(g.get().bossX, g.get().bossY + 60, 0, -250, 0); step(g, 8);
+g.spawnBlue(g.get().bossX, g.get().bossY + 45, 0, -250, 0); step(g, 8);
 ok(g.get().state === 1 && els.restart.textContent === 'Next Level', 'killing the boss wins the level -> "Next Level"');
 
 { // mothership is wide: ~40% of the screen
   lvl(10); g.setFlags({ fire: false, spawner: true }); guard = 0; while (!g.get().bossActive && guard++ < 600) g.update(1 / 60);
   g.setFlags({ fire: false, spawner: false });
   const bx = g.get().bossX, hp0 = g.get().bossHP;
-  g.spawnBlue(bx + 65, g.get().bossY + 60, 0, -250, 0); step(g, 8);
-  ok(g.get().bossHP === hp0 - 1, 'boss hull is 144px wide: a hit 65px off-centre lands');
-  g.spawnBlue(bx + 100, g.get().bossY + 60, 0, -250, 0); step(g, 8);
+  g.spawnBlue(bx + 52, g.get().bossY + 45, 0, -250, 0); step(g, 8);
+  ok(g.get().bossHP === hp0 - 1, 'boss hull is 118px wide (40% of the screen, scaled): a hit 52px off-centre lands');
+  g.spawnBlue(bx + 100, g.get().bossY + 45, 0, -250, 0); step(g, 8);
   ok(g.get().bossHP === hp0 - 1, 'a shot 100px off-centre misses the hull');
 }
 
@@ -282,9 +283,9 @@ ok(g.get().state === 1 && els.restart.textContent === 'Next Level', 'killing the
   const move = type => { lvl(1); g.spawnRed(180, 200, type); step(g, 30); return g.get().redY[0] - 200; };
   const mb = move(0), mt = move(1), ms = move(2);
   ok(Math.abs(mt / mb - 0.5) < 0.05 && Math.abs(ms / mb - 1.5) < 0.05, 'Tank moves at 0.5x and Sprinter at 1.5x Basic speed (' + mb.toFixed(0) + '/' + mt.toFixed(0) + '/' + ms.toFixed(0) + 'px)');
-  const hits = type => { lvl(1); g.spawnRed(180, 300, type); let h = 0; while (g.get().redCount > 0 && h < 20) { g.spawnBlue(180, 330, 0, -250, 0); step(g, 6); h++; } return h; };
+  const hits = type => { lvl(1); g.spawnRed(180, 300, type); let h = 0; while (g.get().redCount > 0 && h < 20) { g.spawnBlue(180, g.get().redY[0] + 28, 0, -250, 0); step(g, 6); h++; } return h; };
   ok(hits(0) === 2 && hits(1) === 5 && hits(2) === 1, 'blues needed: Basic 2, Tank 5, Sprinter 1 (' + hits(0) + '/' + hits(1) + '/' + hits(2) + ')');
-  lvl(1); g.spawnRed(100, 300, 1); g.spawnRed(180, 300, 2); g.spawnBlue(100 + 12, 300, 0, 0, 0); g.spawnBlue(180 + 10, 308, 0, 0, 0); step(g, 1);
+  lvl(1); g.spawnRed(100, 300, 1); g.spawnRed(180, 300, 2); g.spawnBlue(100 + 10, 300, 0, 0, 0); g.spawnBlue(180 + 10, 308, 0, 0, 0); step(g, 1);
   ok(g.get().redHP[0] === 4 && g.get().redHP[1] === 1, 'Tank (r=10.5) is hit from further away than a Sprinter (r=4.9)');
   const seen = n => { const t = new Set(); for (let k = 0; k < 30; k++) { g.setLevel(n); g.setFlags({ fire: false, spawner: true }); g.setGates([]); g.setObstacles({}); g.touch(false);
     let gd = 0; while (g.get().redCount === 0 && gd++ < 1200) g.update(1 / 60); g.get().redType.forEach(x => t.add(x)); } return [...t].sort().join(''); };
@@ -386,7 +387,7 @@ const inside = (x, y, T) => { const c = Math.cos(T[4]), sn = Math.sin(T[4]), dx 
     if (i === 50) { above = q.redY.filter(y => y < 300).length; below = q.redY.filter(y => y > 300).length; }
     spreadAbove = Math.max(spreadAbove, ...q.redX.filter((x, k) => q.redY[k] < 294).map(x => Math.abs(x - 180)));
     if (i === 50) {
-      for (let a = 0; a < q.redX.length; a++) for (let b = a + 1; b < q.redX.length; b++) { const d = Math.hypot(q.redX[a] - q.redX[b], q.redY[a] - q.redY[b]); if (d < 14 * 0.7) crowdedFrames++; } } }
+      for (let a = 0; a < q.redX.length; a++) for (let b = a + 1; b < q.redX.length; b++) { const d = Math.hypot(q.redX[a] - q.redX[b], q.redY[a] - q.redY[b]); if (d < 11.5 * 0.7) crowdedFrames++; } } }
   ok(!pen, 'crowded reds are never squeezed into terrain');
   ok(above > 0 && below > 0, 'choke point: stream is split by the mouth (' + above + ' queued above, ' + below + ' through)');
   ok(spreadAbove > 40, 'reds overflow sideways beyond the 40px mouth (max offset ' + spreadAbove.toFixed(0) + 'px)');
@@ -434,7 +435,7 @@ g.touch(false);
 lvl(100); g.setFlags({ fire: false, spawner: true });
 guard = 0; while (!g.get().bossActive && guard++ < 600) g.update(1 / 60);
 g.setFlags({ fire: false, spawner: false }); g.setBossHP(1);
-g.spawnBlue(g.get().bossX, g.get().bossY + 60, 0, -250, 0); step(g, 8);
+g.spawnBlue(g.get().bossX, g.get().bossY + 45, 0, -250, 0); step(g, 8);
 ok(g.get().state === 1 && els.restart.textContent === 'Victory - Play Again', 'L100 cleared -> "Victory - Play Again"');
 g.restart();
 ok(g.get().level === 1 && g.get().state === 0, 'Play Again wraps to L1');
@@ -466,4 +467,35 @@ for (let i = 0; i < 1500; i++) g.spawnBlue(10 + (i % 50) * 6.8, 300 + ((i / 50) 
   g.touch(false);
   ok(maxB <= 1500 && maxR <= 500, 'soak over levels 1-150 bounded (peak blue ' + maxB + ', red ' + maxR + ')');
   ok(finite, 'soak: no NaN/Infinity positions (bumper/black-hole math is stable)'); }
+// Phase 9: Trackpad Zone, entity scale, boss rebalance
+{
+  ok(g.TRACK_Y === 544 && g.CANNON_Y === g.TRACK_Y && Math.abs(g.TRACK_H - 96) < 1e-6, 'trackpad zone = bottom 15% (y>=544); cannon line sits on its border');
+  ok(Math.abs(g.ES - 0.82) < 1e-9 && Math.abs(g.GATE_H - 26 * 0.82) < 1e-6 && Math.abs(g.CRATE_R - 16 * 0.82) < 1e-6 && Math.abs(g.BOSS_H - 56 * 0.82) < 1e-6, 'all entities scaled by 0.82 (gates, crates, boss)');
+  let tOK = true, bad = '';
+  for (let n = 1; n <= 150; n++) { const L = gl(n);
+    for (const d of L.gates) if (d[1] + g.GATE_H / 2 > g.TRACK_Y) { tOK = false; bad = 'gate L' + n; }
+    for (const t of L.terrain) { const c = Math.cos(t[4]), sn = Math.sin(t[4]), bot = t[1] + Math.abs(t[2] * sn) + Math.abs(t[3] * c); if (bot > g.TRACK_Y) { tOK = false; bad = 'terrain L' + n; } }
+    for (const b of L.bumpers || []) if (b[1] + (b[2] || 0) > g.TRACK_Y) { tOK = false; bad = 'bumper L' + n; }
+    for (const h of L.holes || []) if (h[1] > g.TRACK_Y) { tOK = false; bad = 'hole L' + n; } }
+  ok(tOK, 'generated gates/terrain/bumpers/holes never reach the trackpad zone ' + bad);
+  let live = true, lowest = 0, arcMax = 0, frames = 0;
+  for (const n of [1, 10, 20, 35, 55, 90]) {
+    g.setLevel(n); g.setFlags({ fire: true, spawner: true }); g.touch(true);
+    for (let i = 0; i < 60 * 25 && g.get().state === 0; i++) {
+      if (i % 80 === 0) g.aim(30 + Math.random() * 300);
+      g.update(1 / 30);
+      const q = g.get();
+      for (let k = 0; k < q.mobCount; k++) lowest = Math.max(lowest, q.blueY[k]);
+      for (let k = 0; k < q.redCount; k++) { if (q.redY[k] > g.TRACK_Y) live = false; }
+      if (i % 20 === 0) { rec = []; g.render(); arcMax = Math.max(arcMax, ...rec, 0); rec = null; frames++; }
+    }
+  }
+  g.touch(false);
+  ok(live && lowest <= g.TRACK_Y, 'no blue/red mob ever inside trackpad zone (lowest blue y ' + lowest.toFixed(1) + ' <= 544)');
+  ok(frames > 0 && arcMax <= g.TRACK_Y + 0.5, 'render(): no circle drawn below the zone border (lowest arc edge ' + arcMax.toFixed(1) + ', ' + frames + ' frames)');
+  ok(g.BOSS_PIPE_RATE < g.PIPE_RATE, 'boss pipe slower than level pipe (' + g.BOSS_PIPE_RATE + ' < ' + g.PIPE_RATE + ' reds/s)');
+  for (const n of [10, 20, 30]) { g.setLevel(n); const bp = g.bossParams(); ok(bp.wave >= 3 && bp.wave < gl(n).waveMin && bp.interval >= 8, 'boss wave (' + bp.wave + ') smaller and interval (' + bp.interval.toFixed(1) + 's) slower than level pipe (L' + n + ')'); }
+  const pe = [], fake = { clientX: 5, clientY: 620, pointerId: 1, pointerType: 'touch', preventDefault() {} };
+  ok(/function pointerToLogicalX\(e\)\s*\{[^}]*clientX[^}]*\}/.test(src) && !/pointerToLogicalX[^}]*clientY/.test(src.match(/function pointerToLogicalX[\s\S]*?\n  \}/)[0]) && /canvas\.addEventListener\('pointerdown'/.test(src), 'touch input maps from clientX only, on the full canvas (works anywhere in the trackpad zone)');
+}
 process.exit(fail ? 1 : 0);
