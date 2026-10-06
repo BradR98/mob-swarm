@@ -69,6 +69,10 @@
     color: #fff; font-size: 18px; line-height: 34px; text-align: center; cursor: pointer;
   }
   #mute:active { transform: scale(.92); }
+  #ver {
+    position: absolute; top: 8px; right: 54px; z-index: 5; height: 36px; line-height: 36px;
+    font: 11px/36px system-ui, sans-serif; color: rgba(255,255,255,.55); pointer-events: none;
+  }
   @keyframes pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 </style>
 </head>
@@ -80,6 +84,7 @@
       <h1 id="overlayTitle">Victory!</h1>
       <button id="restart" type="button">Next Level</button>
     </div>
+    <span id="ver">v9.5 · c8</span>
     <button id="mute" type="button" aria-label="Mute audio" title="Mute / unmute">&#128266;</button>
   </div>
 </div>
