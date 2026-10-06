@@ -7,6 +7,12 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#0b1020">
+<link rel="manifest" href="manifest.json">
+<script id="sw-register">
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+  }
+</script>
 <title>Mob Swarm</title>
 <style>
   html, body {
@@ -90,7 +96,10 @@
   var MAX_BUMPERS = 8, MAX_HOLES = 4;
   var MAX_WAVE = 150;            // hard cap on red wall size (two walls always fit the 500 pool)
   var NEG_RECHARGE = 0.5;        // '-' gates regain n * this per second
-  var BOSS_R = 34, BOSS_SPEED_MUL = 0.22;
+  var BOSS_R = 34, BOSS_STRAFE = 60;      // boss radius / base strafe speed (px/s)
+  var SHOTS_PER_SEC = 9;                  // must match FIRE_RATE; used by the HP formulas
+  var BASE_TTK = 35, BOSS_TTK = 45;       // target perfect-stream seconds to clear
+  var HP_PER_LEVEL = 0.02;                // +2% base HP per level
   var HOLE_R = 80, HOLE_CORE = 10, HOLE_G = 480;    // black hole pull radius / kill radius / pull accel
   var FLAG_BUMPED = 128;
 
@@ -111,6 +120,17 @@
   var GATE_SLOTS = [400, 360, 320, 280, 240, 200];            // y centers, bottom to top (40px apart, never overlap)
   var MULT_POOL = [['x', 2, 'x2'], ['x', 3, 'x3'], ['+', 5, '+5'], ['+', 10, '+10']];
 
+  // Max Theoretical Multiplier: blues one shot becomes after passing every positive gate, bottom to top
+  // (gate defs are ordered bottom to top). Negative gates are ignored.
+  function calculateLevelMTM(gates) {
+    var c = 1;
+    for (var i = 0; i < gates.length; i++) {
+      if (gates[i][2] === 'x') c *= gates[i][3];
+      else if (gates[i][2] === '+') c += gates[i][3];
+    }
+    return c;
+  }
+
   // gate def: [width, y, type, n, label, startRight, speed]
   //   types: 'x' multiply, '+' add, '-' tax (destroys up to n, recharges), '/' halve (destroys every 2nd)
   function generateLevel(n) {
@@ -120,9 +140,9 @@
     var wMax = Math.min(MAX_WAVE, 12 + 2 * (n - 1));     // +2 per level
     var L = {
       n: n,
-      baseHP: 800 + n * 400,
+      baseHP: 0, mtm: 1,
       isBoss: isBoss,
-      bossHP: isBoss ? n * 100 : 0,
+      bossHP: 0,
       redInterval: Math.max(2.5, 7.0 * Math.pow(0.98, n - 1)),   // 2% faster every level
       waveMin: wMin, waveMax: Math.max(wMin, wMax),
       redSpeedMul: 1 + Math.min(0.5, (n - 1) * 0.005),
@@ -167,6 +187,9 @@
       defs[i][5] = !defs[best][5];
     }
     L.gates = defs;
+    L.mtm = calculateLevelMTM(defs);
+    L.baseHP = Math.round(SHOTS_PER_SEC * L.mtm * BASE_TTK * (1 + HP_PER_LEVEL * (n - 1)));
+    L.bossHP = isBoss ? SHOTS_PER_SEC * L.mtm * BOSS_TTK : 0;
 
     // --- static obstacles (placed away from gate rows and each other) ---
     var taken = [];
@@ -339,6 +362,7 @@
   var level = 1;                                   // level number, 1-based
   var isBossLevel = false;
   var baseMaxHP = 1200, baseHP = 1200;
+  var bossDir = 1, bossWave = 10, bossInterval = 4;
   var bossActive = false, bossMaxHP = 0, bossHP = 0, bossX = W / 2, bossY = 0, bossSpeed = 0, bossHeat = 0;
   var cannonHP = CANNON_MAX_HP;
   var redInterval = 7, waveMin = 8, waveMax = 12, redSpeed = RED_SPEED_BASE;
@@ -434,7 +458,8 @@
     bossActive = false; bossMaxHP = L.bossHP; bossHP = L.bossHP; bossHeat = 0;
     cannonHP = CANNON_MAX_HP;
     redInterval = L.redInterval; waveMin = L.waveMin; waveMax = L.waveMax; redSpeed = RED_SPEED_BASE * L.redSpeedMul;
-    bossSpeed = RED_SPEED_BASE * BOSS_SPEED_MUL * L.redSpeedMul;
+    bossSpeed = BOSS_STRAFE * L.redSpeedMul; bossDir = 1; bossX = W / 2; bossY = BASE_Y + BOSS_R;
+    bossWave = Math.min(40, 10 + ((level / 5) | 0)); bossInterval = Math.max(2.2, 4.0 * Math.pow(0.99, level - 1));
     state = PLAYING;
     fireAcc = 0; fireCount = 0;
     redTimer = 3;                      // grace period before the first wall / the boss
@@ -483,26 +508,26 @@
   // Red wave: a dense wall (staggered rows, ~2:1 aspect), centered between the map center
   // and the blue cluster (funneling), emerging from the base all at once.
   var WALL_STEP = 16;                       // > red diameter (14): no overlap
-  function spawnWave() {
-    var n = waveMin + ((Math.random() * (waveMax - waveMin + 1)) | 0);
+  function spawnWave(fixedN, originX, topY) {
+    var n = fixedN || (waveMin + ((Math.random() * (waveMax - waveMin + 1)) | 0));
     if (n > MAX_RED - redCount) n = MAX_RED - redCount;       // never overrun the pool
     if (n <= 0) return;
     var cols = Math.min(14, Math.ceil(Math.sqrt(n * 2)));
     var halfW = (cols - 1) * WALL_STEP * 0.5 + WALL_STEP * 0.25;
-    var center = blueN > 0 ? W / 2 + (blueCX - W / 2) * FUNNEL : W / 2;
+    var center = originX !== undefined ? originX : (blueN > 0 ? W / 2 + (blueCX - W / 2) * FUNNEL : W / 2);
     var lo = halfW + RED_R + 4, hi = W - halfW - RED_R - 4;
     center = center < lo ? lo : (center > hi ? hi : center);
     for (var k = 0; k < n; k++) {
       var row = (k / cols) | 0, col = k - row * cols;
       var x = center + (col - (cols - 1) * 0.5) * WALL_STEP + ((row & 1) ? WALL_STEP * 0.25 : -WALL_STEP * 0.25) + (Math.random() - 0.5) * 2;
-      var y = BASE_BOTTOM + RED_R + 1 + row * WALL_STEP;
+      var y = (topY !== undefined ? topY : BASE_BOTTOM) + RED_R + 1 + row * WALL_STEP;
       if (!spawnRed(x, y)) break;
     }
   }
 
   function spawnBoss() {
     bossActive = true;
-    bossX = W / 2; bossY = BASE_BOTTOM + BOSS_R + 4;
+    bossX = W / 2; bossY = BASE_Y + BOSS_R;
     bossHP = bossMaxHP;
     sfxBoss();
   }
@@ -542,7 +567,11 @@
     if (spawnerOn) {
       redTimer -= dt;
       if (redTimer <= 0) {
-        if (isBossLevel) { if (!bossActive) spawnBoss(); redTimer = 1e9; }
+        if (isBossLevel) {
+          if (!bossActive) spawnBoss();
+          else spawnWave(bossWave, bossX, bossY + BOSS_R - 6);   // dense wave dropped from the mothership
+          redTimer = bossInterval * (0.8 + Math.random() * 0.4);
+        }
         else { redTimer = redInterval * (0.7 + Math.random() * 0.6); spawnWave(); }
       }
     }
@@ -705,8 +734,12 @@
       if (eaten) { rdead[i] = 1; killedRed++; spawnPop(nx, ny); }
     }
 
-    // Boss marches down the center lane
-    if (bossActive) { bossY += bossSpeed * dt; }
+    // Boss hovers at the base line, strafing left and right like a moving base
+    if (bossActive) {
+      bossX += bossDir * bossSpeed * dt;
+      if (bossX > W - BOSS_R - 12) { bossX = W - BOSS_R - 12; bossDir = -1; }
+      else if (bossX < BOSS_R + 12) { bossX = BOSS_R + 12; bossDir = 1; }
+    }
 
     // Blue-vs-red: bucket blues in the grid, each red tests its 3x3 neighbourhood.
     // Kills are only flagged here; compaction happens after, so grid indices stay valid.
@@ -779,8 +812,6 @@
       sfxCannonHit();
       if (cannonHP <= 0) { cannonHP = 0; endGame(LOST); return; }
     }
-    // The boss touching the cannon line is instant defeat
-    if (bossActive && bossY + BOSS_R >= CANNON_Y) { cannonHP = 0; cannonFlash = 1; sfxCannonHit(); endGame(LOST); return; }
 
     // Effects decay
     if (baseHeat > 0) baseHeat = Math.max(0, baseHeat - dt * 3);
@@ -1006,7 +1037,7 @@
         var sl = Array.prototype.slice;
         return { mobCount: mobCount, redCount: redCount, baseHP: baseHP, cannonHP: cannonHP, state: state,
                  level: level, gateCount: gateCount, bumpCount: bumpCount, holeCount: holeCount,
-                 isBoss: isBossLevel, bossActive: bossActive, bossHP: bossHP, bossMaxHP: bossMaxHP, bossY: bossY,
+                 isBoss: isBossLevel, bossActive: bossActive, bossHP: bossHP, bossMaxHP: bossMaxHP, bossY: bossY, bossX: bossX,
                  capBlue: MAX_MOBS, capRed: MAX_RED,
                  redX: sl.call(rx, 0, redCount), redY: sl.call(ry, 0, redCount), redHP: sl.call(rhp, 0, redCount),
                  blueX: sl.call(mx, 0, mobCount), blueY: sl.call(my, 0, mobCount) };
@@ -1015,6 +1046,7 @@
       touch: function (b) { dragging = !!b; },
       setBaseHP: function (n) { baseHP = n; ghostHP = n; },
       setBossHP: function (n) { bossHP = n; },
+      spawnBoss: spawnBoss, calculateLevelMTM: calculateLevelMTM,
       setBossSpeed: function (pxPerSec) { bossSpeed = pxPerSec; },
       spawnBlue: function (x, y, vx, vy, mask) { return spawnMob(x, y, vx, vy, mask || 0); },
       spawnRed: spawnRed,

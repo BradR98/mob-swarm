@@ -37,3 +37,9 @@ _Last updated: 2026-10-05_
 ## Handoff Notes
 
 If model quota runs out, continue from the next unchecked item in [BACKLOG.md](BACKLOG.md). Commit small and often.
+
+## Phase 6 balance status (open)
+Perfect-aim bot, no reds, 8 runs: L1 base 37s, L9 60s, L11 20s, L49 69s, L51 67s; boss L10 77s, L20 51s, L50 76s (targets 35s/45s).
+With red waves: L1 8/8 wins; boss levels L10/L20/L50 0/8 (cannon dead in ~12-17s).
+Causes: MTM assumes every shot passes every gate, but gates slide and the 1500 blue pool saturates, so real throughput is far below 9*MTM. The boss is a small strafing target and the shielded base absorbs most blues.
+Options: calibrate with an empirical efficiency factor / pool-aware MTM cap; weaker or slower boss waves; make the boss wider.

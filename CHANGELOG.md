@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Phase 6
+- Added `calculateLevelMTM(gates)` (Max Theoretical Multiplier). Base HP = `9 * MTM * 35 * (1 + 0.02 * (level - 1))`. Boss HP = `9 * MTM * 45`.
+- Boss is now a hovering mothership at the base line. It strafes left/right and drops dense red waves aimed at the blue mass. It no longer marches down the lane.
+- PWA: added `manifest.json` and `sw.js` (cache-first offline for `index.html` + `manifest.json`), manifest link and SW registration in `<head>`.
+- Sims updated (`bot-sim.js`, `boss-sim.js`) and headless tests updated (all pass).
+- KNOWN ISSUE: the sims do NOT confirm the 35s/45s TTK targets (see PROJECT_STATUS.md). Boss levels are 0/8 winnable by the perfect-aim bot.
+
 ### Added (Phase 5: procedural 100-level campaign)
 - `generateLevel(n)` replaces the hardcoded levels: seeded PRNG so level N is always the same board. Base HP = 800 + 400n (L1 1,200 ... L100 40,800).
 - Red spawn interval shrinks 2% per level (floor 2.5s); wave size grows +1 (min) / +2 (max) per level, hard-capped at 150 so two walls always fit the 500-red pool. Red speed +0.5%/level (max +50%).

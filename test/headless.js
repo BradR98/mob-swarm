@@ -34,8 +34,14 @@ const quiet = () => { g.setFlags({ fire: false, spawner: false }); g.setGates([]
 const lvl = n => { g.setLevel(n); quiet(); };
 
 // ---------- Generator ----------
-ok(gl(1).baseHP === 1200 && gl(3).baseHP === 2000 && gl(10).baseHP === 4800 && gl(100).baseHP === 40800,
-  'Base HP = 800 + 400n (L1 1200, L3 2000, L10 4800, L100 40800)');
+{ // Phase 6: HP derives from the Max Theoretical Multiplier
+  const mtm = gates => gl(0) && g.calculateLevelMTM(gates);
+  ok(mtm([[0,0,'x',2],[0,0,'+',5],[0,0,'x',3],[0,0,'-',10]]) === 21 && mtm([[0,0,'/',2]]) === 1, 'MTM = sequential product/sum of positive gates, negatives ignored (x2,+5,x3 -> 21)');
+  let hpOK = true;
+  for (let n = 1; n <= 150; n++) { const L = gl(n); if (L.baseHP !== Math.round(9 * L.mtm * 35 * (1 + 0.02 * (n - 1))) || L.mtm !== g.calculateLevelMTM(L.gates)) hpOK = false; }
+  ok(hpOK, 'Base HP = 9 * MTM * 35 * (1 + 2% per level) for levels 1-150');
+  ok(gl(1).baseHP === 9 * 2 * 35, 'L1 (single x2): 630 HP');
+}
 ok(JSON.stringify(gl(37)) === JSON.stringify(gl(37)) && JSON.stringify(gl(37)) !== JSON.stringify(gl(38)), 'levels are deterministic per level number');
 {
   const isNeg = t => t === '-' || t === '/';
@@ -49,7 +55,7 @@ ok(JSON.stringify(gl(37)) === JSON.stringify(gl(37)) && JSON.stringify(gl(37)) !
     if (n >= 31 && n <= 50 && (L.bumpers.length < 2 || L.holes.length)) { tierOK = false; why = 'tier3 ' + n; }
     if (n >= 51 && L.holes.length < 1) { tierOK = false; why = 'tier4 ' + n; }
     if (n <= 10 && !L.gates.every(d => ['x2', 'x3', '+5', '+10'].includes(d[4]))) { tierOK = false; why = 'labels ' + n; }
-    if ((n % 10 === 0) !== L.isBoss || L.bossHP !== (L.isBoss ? n * 100 : 0)) { bossOK = false; why = 'boss ' + n; }
+    if ((n % 10 === 0) !== L.isBoss || L.bossHP !== (L.isBoss ? 9 * L.mtm * 45 : 0)) { bossOK = false; why = 'boss ' + n; }
     L.gates.forEach((d, i) => {                           // negative gates oppose the nearest multiplier
       if (!isNeg(d[2])) return;
       let best = -1, bd = 99;
@@ -61,7 +67,7 @@ ok(JSON.stringify(gl(37)) === JSON.stringify(gl(37)) && JSON.stringify(gl(37)) !
     L.bumpers.forEach(b => L.gates.forEach(d => { if (Math.abs(b[1] - d[1]) < 13 + b[2]) boundsOK = false; }));
   }
   ok(tierOK, 'obstacle tiers: 1-10 basic, 11-30 +negatives, 31-50 +bumpers, 51+ +black holes ' + why);
-  ok(bossOK, 'bosses only on multiples of 10, HP = level * 100');
+  ok(bossOK, 'bosses only on multiples of 10, HP = 9 * MTM * 45');
   ok(oppOK, 'negative gates always slide opposite the nearest multiplier gate');
   ok(waveOK, 'wave sizes capped at ' + g.MAX_WAVE + ' (two walls always fit the 500 pool) for levels 1-150');
   ok(intervalOK && gl(2).redInterval < gl(1).redInterval && gl(40).redInterval < gl(20).redInterval, 'red spawn interval shrinks every level (2%)');
@@ -224,28 +230,39 @@ g.spawnBlue(240, 300, 0, 0, 0);
 step(g, 3);
 ok(Math.abs(g.get().blueX[0] - 240) > 0.2 || Math.abs(g.get().blueY[0] - 300) > 0.2, 'black hole gravity tugs nearby mobs');
 
-// ---------- Boss ----------
+// ---------- Boss (hovering mothership) ----------
 lvl(10); g.setFlags({ fire: false, spawner: true });
 guard = 0; while (!g.get().bossActive && guard++ < 60 * 10) g.update(1 / 60);
-ok(g.get().isBoss && g.get().bossActive && g.get().bossHP === 1000, 'L10 boss spawns with 1000 HP (level * 100)');
-step(g, 60 * 3);
-ok(g.get().redCount === 0, 'no normal red waves on boss levels');
-{ const y0 = g.get().bossY; step(g, 30); ok(g.get().bossY > y0, 'boss marches down (y ' + y0.toFixed(0) + ' -> ' + g.get().bossY.toFixed(0) + ')'); }
+ok(g.get().isBoss && g.get().bossActive && g.get().bossHP === 9 * gl(10).mtm * 45, 'L10 boss spawns with 9*MTM*45 = ' + g.get().bossHP + ' HP');
+ok(Math.abs(g.get().bossY - 86) < 1, 'boss hovers at the base line (y ' + g.get().bossY.toFixed(0) + ')');
+{ let xmin = 1e9, xmax = -1e9, yDrift = 0, waves = 0, lastR = 0, peakWave = 0;
+  g.setFlags({ fire: false, spawner: true });
+  for (let i = 0; i < 60 * 40 && g.get().state === 0; i++) {
+    g.update(1 / 60); const q = g.get();
+    xmin = Math.min(xmin, q.bossX); xmax = Math.max(xmax, q.bossX); yDrift = Math.max(yDrift, Math.abs(q.bossY - 86));
+    if (q.redCount > lastR + 5) { waves++; peakWave = Math.max(peakWave, q.redCount - lastR); } lastR = q.redCount;
+    if (q.state !== 0) break;
+  }
+  ok(xmax - xmin > 200 && yDrift < 1, 'boss strafes left/right (x ' + xmin.toFixed(0) + '..' + xmax.toFixed(0) + ') and never marches down');
+  ok(waves >= 1 && peakWave >= 10, 'boss fires dense red waves while strafing (' + waves + ' waves, biggest ' + peakWave + ')'); }
+lvl(10); g.setFlags({ fire: false, spawner: true });
+guard = 0; while (!g.get().bossActive && guard++ < 60 * 10) g.update(1 / 60);
+step(g, 60 * 2);
+ok(g.get().redCount === 0 || g.get().bossActive, 'boss stays above the gate field (no marching)');
 g.setFlags({ fire: false, spawner: false });
-{ const hp0 = g.get().bossHP; g.spawnBlue(180, g.get().bossY + 60, 0, -250, 0); step(g, 8);
+{ const hp0 = g.get().bossHP; g.spawnBlue(g.get().bossX, g.get().bossY + 60, 0, -250, 0); step(g, 8);
   ok(g.get().bossHP === hp0 - 1 && g.get().mobCount === 0, 'one blue impact = 1 boss damage (' + hp0 + ' -> ' + g.get().bossHP + ')'); }
 lvl(10); g.setFlags({ fire: false, spawner: true });
-t = 0; let sawHP5 = true;
-while (g.get().state === 0 && t < 60 * 60) { g.update(1 / 60); if (g.get().state === 0 && g.get().cannonHP !== 5) sawHP5 = false; t++; }
-ok(g.get().state === 2 && sawHP5, 'boss touching the cannon line is instant defeat (after ' + (t / 60).toFixed(1) + 's, shield untouched until then)');
+t = 0; while (g.get().state === 0 && t < 60 * 120) { g.update(1 / 60); t++; }
+ok(g.get().state === 2, 'unopposed boss waves defeat the player via cannon HP (after ' + (t / 60).toFixed(1) + 's)');
 lvl(10); g.spawnBlue(100, 130, 0, -250, 0);
 step(g, 10);
-ok(g.get().baseHP === 4800 && g.get().mobCount === 0, 'base is shielded on boss levels (HP stays ' + g.get().baseHP + ')');
+ok(g.get().baseHP === gl(10).baseHP && g.get().mobCount === 0, 'base is shielded on boss levels (HP stays ' + g.get().baseHP + ')');
 lvl(20); g.setFlags({ fire: false, spawner: true });
 guard = 0; while (!g.get().bossActive && guard++ < 60 * 10) g.update(1 / 60);
-ok(g.get().bossHP === 2000, 'L20 boss HP 2000');
+ok(g.get().bossHP === 9 * gl(20).mtm * 45, 'L20 boss HP = 9*MTM*45 = ' + g.get().bossHP);
 g.setFlags({ fire: false, spawner: false }); g.setBossHP(1);
-g.spawnBlue(180, g.get().bossY + 60, 0, -250, 0); step(g, 8);
+g.spawnBlue(g.get().bossX, g.get().bossY + 60, 0, -250, 0); step(g, 8);
 ok(g.get().state === 1 && els.restart.textContent === 'Next Level', 'killing the boss wins the level -> "Next Level"');
 
 // ---------- Progression ----------
@@ -253,13 +270,13 @@ lvl(1); g.setFlags({ fire: true, spawner: false }); g.setBaseHP(30); g.aim(100);
 t = 0; while (g.get().state === 0 && t < 60 * 300) { g.update(1 / 60); t++; }
 ok(g.get().state === 1 && els.restart.textContent === 'Next Level', 'L1 won -> "Next Level"');
 g.restart();
-ok(g.get().level === 2 && g.get().baseHP === 1600 && g.get().state === 0 && g.get().mobCount === 0 && g.get().redCount === 0,
-  'Next Level regenerates the board in place (L2, 1,600 HP, pools empty)');
+ok(g.get().level === 2 && g.get().baseHP === gl(2).baseHP && g.get().state === 0 && g.get().mobCount === 0 && g.get().redCount === 0,
+  'Next Level regenerates the board in place (L2, MTM-scaled HP, pools empty)');
 g.touch(false);
 lvl(100); g.setFlags({ fire: false, spawner: true });
 guard = 0; while (!g.get().bossActive && guard++ < 600) g.update(1 / 60);
 g.setFlags({ fire: false, spawner: false }); g.setBossHP(1);
-g.spawnBlue(180, g.get().bossY + 60, 0, -250, 0); step(g, 8);
+g.spawnBlue(g.get().bossX, g.get().bossY + 60, 0, -250, 0); step(g, 8);
 ok(g.get().state === 1 && els.restart.textContent === 'Victory - Play Again', 'L100 cleared -> "Victory - Play Again"');
 g.restart();
 ok(g.get().level === 1 && g.get().state === 0, 'Play Again wraps to L1');

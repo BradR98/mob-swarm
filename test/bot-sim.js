@@ -36,21 +36,24 @@ function play(n, { spawner = true, cap = 600 } = {}) {
 }
 const avg = a => a.reduce((s, v) => s + v, 0) / a.length;
 
-console.log('--- 1. pure siege time (no reds, perfect aim): is 800+400n really 25-40s? ---');
-for (const n of [1, 2, 3, 4, 5, 7, 9]) {
-  const r = [0, 1, 2].map(() => play(n, { spawner: false }));
-  console.log('L' + n, 'base ' + (800 + 400 * n) + ' HP -> clear', avg(r.map(x => x.secs)).toFixed(0) + 's');
+function playPure(n) {            // no red waves; boss levels get the boss spawned at t=0
+  g.setLevel(n); g.setFlags({ fire: true, spawner: false }); g.touch(true);
+  if (g.get().isBoss) g.spawnBoss();
+  let t = 0;
+  while (g.get().state === 0 && t < 60 * 300) { if (t % 6 === 0) g.aim(Math.max(16, Math.min(344, smartAim(g.get())))); g.update(1 / 60); t++; }
+  return { won: g.get().state === 1, secs: t / 60 };
+}
+const R = +process.argv[2] || 10;
+console.log('--- 1. pure time-to-kill, no reds, perfect aim (' + R + ' runs): targets base 35s / boss 45s ---');
+for (const n of [1, 9, 11, 49, 51, 10, 20, 50]) {
+  const L = g.generateLevel(n), r = []; for (let i = 0; i < R; i++) r.push(playPure(n));
+  const secs = r.map(x => x.secs);
+  console.log('L' + String(n).padEnd(3), (L.isBoss ? 'BOSS ' : 'base ') + String(L.isBoss ? L.bossHP : L.baseHP).padEnd(6) + 'HP  MTM ' + String(L.mtm).padEnd(4),
+    'TTK avg ' + avg(secs).toFixed(0) + 's  (min ' + Math.min(...secs).toFixed(0) + ' / max ' + Math.max(...secs).toFixed(0) + ')  theory ' + ((L.isBoss ? L.bossHP : L.baseHP / (1 + 0.02 * (n - 1))) / (9 * L.mtm)).toFixed(0) + 's');
 }
 
-console.log('--- 2. normal levels with red walls (perfect aim, 10 runs each) ---');
-for (const n of [1, 2, 3, 5]) {
-  const r = []; for (let i = 0; i < 10; i++) r.push(play(n));
-  console.log('L' + n, 'win ' + r.filter(x => x.won).length + '/10', 'avg ' + avg(r.map(x => x.secs)).toFixed(0) + 's', 'peak reds ' + Math.max(...r.map(x => x.peakR)), 'worst cannon HP ' + Math.min(...r.map(x => x.minCannon)));
-}
-
-const N = +process.argv[2] || 20;
-console.log('--- 3. boss levels (perfect aim, ' + N + ' runs each) ---');
-for (const n of [10, 20, 30]) {
-  const r = []; for (let i = 0; i < N; i++) r.push(play(n));
-  console.log('L' + n + ' boss ' + (n * 100) + ' HP', 'win ' + r.filter(x => x.won).length + '/' + N, 'avg ' + avg(r.map(x => x.secs)).toFixed(1) + 's', 'peak blues ' + Math.max(...r.map(x => x.maxMobs)));
+console.log('--- 2. full games with red waves (perfect aim, ' + R + ' runs each) ---');
+for (const n of [1, 10, 20, 50]) {
+  const r = []; for (let i = 0; i < R; i++) r.push(play(n));
+  console.log('L' + n, 'win ' + r.filter(x => x.won).length + '/' + R, 'avg ' + avg(r.map(x => x.secs)).toFixed(0) + 's', 'peak reds ' + Math.max(...r.map(x => x.peakR)), 'worst cannon HP ' + Math.min(...r.map(x => x.minCannon)), 'peak blues ' + Math.max(...r.map(x => x.maxMobs)));
 }

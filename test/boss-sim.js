@@ -38,22 +38,25 @@ function play(n, { spawner = true, cap = 600 } = {}) {
 const avg = a => a.reduce((s, v) => s + v, 0) / a.length;
 
 
-function playBoss(n,{holdUntilBoss=true,speed=null}={}){
-  g.setLevel(n); g.setFlags({fire:true,spawner:true}); g.touch(!holdUntilBoss);
-  if(speed!=null) g.setBossSpeed(speed);
-  let t=0,spawnT=null;
-  while(g.get().state===0&&t<60*120){
-    const q=g.get();
-    if(q.bossActive&&spawnT===null){spawnT=t;g.touch(true);}
-    if(t%6===0)g.aim(Math.max(16,Math.min(344,smartAim(q))));
-    g.update(1/60);t++;
+function playBoss(n, { holdUntilBoss = true, spawner = true } = {}) {
+  g.setLevel(n); g.setFlags({ fire: true, spawner }); g.touch(!holdUntilBoss);
+  if (!spawner) { g.spawnBoss(); g.touch(true); }
+  let t = 0, spawnT = null, minCannon = 5;
+  while (g.get().state === 0 && t < 60 * 180) {
+    const q = g.get();
+    if (q.bossActive && spawnT === null) { spawnT = t; g.touch(true); }
+    if (t % 6 === 0) g.aim(Math.max(16, Math.min(344, smartAim(q))));
+    g.update(1 / 60); t++; minCannon = Math.min(minCannon, g.get().cannonHP);
   }
-  return {won:g.get().state===1,fight:spawnT===null?0:(t-spawnT)/60};
+  return { won: g.get().state === 1, fight: spawnT === null ? 0 : (t - spawnT) / 60, minCannon };
 }
-const N=20;
-function row(label,n,opts){const r=[];for(let i=0;i<N;i++)r.push(playBoss(n,opts));
-  console.log(label.padEnd(34),'win',r.filter(x=>x.won).length+'/'+N,'avg fight',avg(r.map(x=>x.fight)).toFixed(1)+'s');}
-console.log('boss speed default = '+(187.5*0.22).toFixed(0)+' px/s');
-for(const n of [10,20,30]) row('L'+n+' fire only once boss appears',n,{holdUntilBoss:true});
-for(const n of [10,20,30]) row('L'+n+' pre-loaded swarm (fire early)',n,{holdUntilBoss:false});
-for(const sp of [30,22,16]) for(const n of [20,30]) row('L'+n+' fair fight, boss '+sp+' px/s',n,{holdUntilBoss:true,speed:sp});
+const N = +process.argv[2] || 10;
+function row(label, n, opts) {
+  const r = []; for (let i = 0; i < N; i++) r.push(playBoss(n, opts));
+  const L = g.generateLevel(n);
+  console.log(label.padEnd(36), 'HP ' + String(L.bossHP).padEnd(6), 'win', r.filter(x => x.won).length + '/' + N, 'avg fight', avg(r.map(x => x.fight)).toFixed(1) + 's', 'min ' + Math.min(...r.map(x => x.fight)).toFixed(0) + ' max ' + Math.max(...r.map(x => x.fight)).toFixed(0), 'worst cannonHP ' + Math.min(...r.map(x => x.minCannon)));
+}
+console.log('boss = hovering mothership; TTK target 45s (perfect stream); N=' + N);
+for (const n of [10, 20, 30, 50]) row('L' + n + ' no red waves (pure TTK)', n, { spawner: false });
+for (const n of [10, 20, 30, 50]) row('L' + n + ' full fight, fire once boss shows', n, { holdUntilBoss: true });
+for (const n of [10, 50]) row('L' + n + ' full fight, pre-loaded swarm', n, { holdUntilBoss: false });
