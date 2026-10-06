@@ -46,7 +46,7 @@ G0.min = -1e4; G0.max = 1e4; G0.x = 100;
 g.spawnBlue(150, 380, 0, -250, 0);
 step(g, 20);
 ok(g.get().mobCount === 2, 'x2 gives exactly 2 mobs (got ' + g.get().mobCount + ')');
-step(g, 40);
+step(g, 20);   // total 40 frames: well before any mob can reach the base (~57+)
 ok(g.get().mobCount === 2, 'no re-trigger after passing (got ' + g.get().mobCount + ')');
 
 // 3. +5 gate: 1 -> 6
