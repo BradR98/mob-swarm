@@ -35,9 +35,12 @@ g.touch(false);
 const quiet = () => { g.setFlags({ fire: false, spawner: false }); parkGates(g); };
 
 // 1. Level config
-g.setLevel(0); ok(g.get().gateCount === 1 && g.get().baseHP === 40, 'L1: 1 gate, base 40');
-g.setLevel(1); ok(g.get().gateCount === 2 && g.get().baseHP === 80, 'L2: 2 gates, base 80');
-g.setLevel(2); ok(g.get().gateCount === 2 && g.get().baseHP === 150, 'L3: 2 gates, base 150');
+g.setLevel(0); ok(g.get().gateCount === 1 && g.get().baseHP === 1000, 'L1: 1 gate, base 1,000');
+g.setLevel(1); ok(g.get().gateCount === 3 && g.get().baseHP === 3500, 'L2: 3 gates (x2,+5,-10), base 3,500');
+ok(g.gates[2].type === '-' && g.gates[2].vx * g.gates[0].vx < 0, 'L2: -10 gate slides opposite to the x2 gate below it');
+g.setLevel(2); ok(g.get().gateCount === 4 && g.get().baseHP === 10000, 'L3: 4 gates (x2,+5,/2,-10), base 10,000');
+ok(g.gates[2].type === '/' && g.gates[2].vx * g.gates[0].vx < 0, 'L3: /2 gate opposes x2');
+ok(g.gates[3].type === '-' && g.gates[3].vx * g.gates[1].vx < 0, 'L3: -10 gate opposes +5');
 ok(g.gates[0].speed > 150, 'L3 gates are high-speed (' + g.gates[0].speed + ')');
 g.setFlags({ fire: true, spawner: true });
 
@@ -69,7 +72,10 @@ g.setLevel(1); quiet();
 g.spawnBlue(100, 320, 0, -250, 0);
 g.spawnRed(100, 300);
 step(g, 6);
-ok(g.get().mobCount === 0 && g.get().redCount === 0, 'blue and red cancel (' + g.get().mobCount + '/' + g.get().redCount + ')');
+ok(g.get().mobCount === 0 && g.get().redCount === 1 && g.get().redHP[0] === 1, 'first blue only wounds the red (hp 2 -> ' + g.get().redHP[0] + ', red alive)');
+g.spawnBlue(100, 380, 0, -250, 0);
+step(g, 20);
+ok(g.get().mobCount === 0 && g.get().redCount === 0, 'second blue destroys it (' + g.get().mobCount + '/' + g.get().redCount + ')');
 
 // 6. Mass collision keeps pools consistent (each red kills exactly one blue)
 g.setLevel(1); quiet();
@@ -77,7 +83,7 @@ for (let i = 0; i < 10; i++) g.spawnRed(40 + i * 28, 300);
 for (let i = 0; i < 30; i++) g.spawnBlue(40 + (i % 10) * 28, 330 + ((i / 10) | 0) * 40, 0, -250, 0);
 step(g, 30);
 const s6 = g.get();
-ok(s6.redCount === 0 && s6.mobCount === 20, 'mass collision (blue ' + s6.mobCount + ', red ' + s6.redCount + ')');
+ok(s6.redCount === 0 && s6.mobCount === 10, 'mass collision: 10 reds cost 20 blues (blue ' + s6.mobCount + ', red ' + s6.redCount + ')');
 
 // 7. Cannon shield: a red crossing the line costs 1 HP, is recycled, game continues
 g.setLevel(0); quiet();
@@ -186,13 +192,36 @@ ok(peakR <= 500 && peakB <= 1500, 'stress pools bounded (peak red ' + peakR + ',
 console.log('INFO stress update cost: ' + msPer.toFixed(2) + ' ms/frame over ' + sFrames + ' frames (budget 16.7ms incl. render)');
 ok(msPer < 8, 'stress logic cost < 8ms/frame (' + msPer.toFixed(2) + ')');
 
+
+// 10f. Negative gates
+g.setLevel(2); quiet(); g.touch(false);
+{ const N = g.gates[3]; N.min = -1e4; N.max = 1e4; N.x = 100; N.vx = 0;          // '-10' at y=270, spans x 100..180
+  for (let k = 0; k < 14; k++) g.spawnBlue(140, 300 + k * 3, 0, -250, 0);
+  step(g, 25);
+  const surv = g.get().mobCount;
+  ok(surv >= 3 && surv <= 5, '-10 gate destroys ~10 of 14 mobs (survivors ' + surv + ')');
+  step(g, 130);
+  ok(N.charges >= 9.5, '-10 gate recharges (' + N.charges.toFixed(1) + '/10)'); }
+g.setLevel(2); quiet(); g.touch(false);
+{ const D = g.gates[2]; D.min = -1e4; D.max = 1e4; D.x = 100; D.vx = 0;          // '/2' at y=350
+  for (let k = 0; k < 20; k++) g.spawnBlue(140, 380 + k * 3, 0, -250, 0);
+  step(g, 25);
+  ok(g.get().mobCount === 10, '/2 gate halves the stream exactly (20 -> ' + g.get().mobCount + ')'); }
+
+// 10g. Siege: bases need sustained damage
+g.setLevel(2); g.setFlags({ fire: true, spawner: false }); parkGates(g); g.aim(140); g.touch(true);
+step(g, 60 * 5);
+{ const hp5 = g.get().baseHP;
+  ok(hp5 > 9000, 'L3 base barely scratched after 5s of unmultiplied fire (' + hp5 + '/10000)'); }
+g.touch(false);
+
 // 11. Level progression
-g.setLevel(0); g.setFlags({ fire: true, spawner: false }); g.aim(100); g.touch(true);
+g.setLevel(0); g.setFlags({ fire: true, spawner: false }); g.aim(100); g.touch(true); g.setBaseHP(30);
 t = 0; while (g.get().state === 0 && t < 60 * 300) { g.update(1 / 60); t++; }
 ok(g.get().state === 1 && els.restart.textContent === 'Next Level', 'L1 won in ' + (t / 60).toFixed(1) + 's -> "Next Level"');
 g.restart();
-ok(g.get().level === 1 && g.get().baseHP === 80 && g.get().state === 0, 'Next Level loads L2');
-g.setLevel(2); g.aim(100); g.touch(true);
+ok(g.get().level === 1 && g.get().baseHP === 3500 && g.get().state === 0, 'Next Level loads L2 (3,500 HP, new gates)');
+g.setLevel(2); g.aim(100); g.touch(true); g.setBaseHP(30);
 t = 0; while (g.get().state === 0 && t < 60 * 600) { g.update(1 / 60); t++; }
 ok(g.get().state === 1 && els.restart.textContent === 'Victory - Play Again', 'L3 won in ' + (t / 60).toFixed(1) + 's -> "Victory - Play Again"');
 g.restart();

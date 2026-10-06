@@ -17,7 +17,7 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done. Suggested model: **Sonnet** =
 | ID | Task | Status | Model |
 |----|------|--------|-------|
 | P2-1 | Dynamic lane flow (lateral attraction between red and blue masses) | [x] | Sonnet |
-| P2-2 | Gate math variants (`+N`, `xN` done; negative gates `-N`, `/N` open) | [~] | Sonnet |
+| P2-2 | Gate math variants (`+N`, `xN`, negative `-N` tax and `/N` halving) | [x] | Sonnet |
 | P2-3 | Collision dynamics: Red vs Blue units (spatial hash grid) | [x] | Pro (design), Sonnet |
 | P2-4 | Per-gate single-pass guard to prevent re-triggering | [x] | Sonnet |
 
@@ -44,6 +44,16 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done. Suggested model: **Sonnet** =
 | P5-1 | PWA `manifest.webmanifest` and icons | [ ] | Flash |
 | P5-2 | Offline-caching service worker | [ ] | Sonnet |
 | P5-3 | Frame-rate / battery throttling modes (60/30 FPS, pause on hidden, reduced effects) | [ ] | Sonnet |
+
+## Phase 4 (delivered): Siege Balance
+- [x] Siege base HP (1,000 / 3,500 / 10,000) with damage flicker + chip-damage trail
+- [x] Negative gates (`-10`, `/2`), red, sliding opposite the multiplier below, dissonant SFX
+- [x] Red shield: 2 blue hits per red (orange when wounded)
+- [ ] **Re-tune base HP**: L3 takes ~167s of perfect aim (target was 25-40s); see CHANGELOG / bot-sim
+
+## Phase 5 (NOT STARTED): 100-level procedural campaign
+- [ ] `generateLevel(n)`, obstacle unlocks (negatives 11+, bumpers 31+, black holes 51+), boss every 10 levels
+- [ ] Blocked on: base HP formula decision (see PROJECT_STATUS)
 
 ## Model Handoff and Limits Plan
 

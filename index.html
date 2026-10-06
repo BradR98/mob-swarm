@@ -70,6 +70,7 @@
   var MAX_MOBS = 1500;           // blue pool capacity
   var MAX_RED = 500;             // red pool capacity
   var MOB_R = 4, RED_R = 7;
+  var RED_HP = 2;
   var MOB_SPEED = 250;           // px/s upward (blue)
   var RED_SPEED_BASE = MOB_SPEED * 0.75;   // px/s downward (red); scaled per level
   var FIRE_RATE = 9;             // shots/s
@@ -89,17 +90,23 @@
   // ---------- Levels ----------
   // gates: [width, y, type, n, label, startRight, speed]
   var LEVELS = [
-    { baseHP: 40,  redInterval: 7.0,  waveMin: 8,  waveMax: 12, redSpeedMul: 1.0,
+    // Siege balance: huge base HP so multiplied swarms must be sustained, not burst.
+    // Gate types: 'x' multiply, '+' add, '-' tax (kills up to n blues, recharges), '/' halve (kills every 2nd blue).
+    // Negative gates (red) slide opposite to the multiplier gate just below them.
+    { baseHP: 1000,  redInterval: 7.0,  waveMin: 8,  waveMax: 12, redSpeedMul: 1.0,
       gates: [[130, 360, 'x', 2, 'x2', false, 60]] },
-    { baseHP: 80,  redInterval: 8.5,  waveMin: 20, waveMax: 25, redSpeedMul: 1.0,
-      gates: [[130, 360, 'x', 2, 'x2', false, 80], [110, 280, '+', 5, '+5', true, 100]] },
-    { baseHP: 150, redInterval: 10.0, waveMin: 40, waveMax: 50, redSpeedMul: 1.15,
-      gates: [[110, 360, 'x', 2, 'x2', false, 190], [90, 280, '+', 5, '+5', true, 230]] }
+    { baseHP: 3500,  redInterval: 8.5,  waveMin: 20, waveMax: 25, redSpeedMul: 1.0,
+      gates: [[130, 360, 'x', 2, 'x2', false, 80], [110, 280, '+', 5, '+5', true, 100],
+              [90, 320, '-', 10, '-10', true, 90]] },
+    { baseHP: 10000, redInterval: 10.0, waveMin: 40, waveMax: 50, redSpeedMul: 1.15,
+      gates: [[110, 390, 'x', 2, 'x2', false, 190], [90, 310, '+', 5, '+5', true, 230],
+              [100, 350, '/', 2, '/2', true, 210], [80, 270, '-', 10, '-10', false, 200]] }
   ];
-  var MAX_GATES = 2;
+  var MAX_GATES = 4;
+  var NEG_RECHARGE = 0.5;                    // '-' gates regain n * this per second
 
   // Gate objects are pre-allocated and reconfigured per level. They slide between [min, max] and bounce.
-  var GATES = [{}, {}];
+  var GATES = [{}, {}, {}, {}];
   var gateCount = 0;
   function cfgGate(G, d) {
     G.w = d[0]; G.y = d[1]; G.h = 26; G.type = d[2]; G.n = d[3]; G.label = d[4];
@@ -107,6 +114,7 @@
     G.min = 10; G.max = W - 10 - G.w;
     G.x = G.startRight ? G.max : G.min;
     G.vx = G.startRight ? -G.speed : G.speed;
+    G.charges = G.n; G.flip = 0;             // state for '-' and '/' gates
   }
 
   // ---------- Blue mob pool: pre-allocated parallel typed arrays ----------
@@ -136,11 +144,12 @@
   var ry = new Float32Array(MAX_RED);
   var rvx = new Float32Array(MAX_RED);
   var rdead = new Uint8Array(MAX_RED);
+  var rhp = new Uint8Array(MAX_RED);       // red shield: RED_HP blues to destroy one red
   var redCount = 0;
   function spawnRed(x, y) {
     if (redCount >= MAX_RED) return false;
     var i = redCount++;
-    rx[i] = x; ry[i] = y; rvx[i] = 0; rdead[i] = 0;
+    rx[i] = x; ry[i] = y; rvx[i] = 0; rdead[i] = 0; rhp[i] = RED_HP;
     return true;
   }
 
@@ -214,6 +223,12 @@
     if (clock - lastHitSfx < 0.04) return; lastHitSfx = clock;
     noise(0.025, 'bandpass', 1400, 0.07);
   }
+  var lastNegSfx = -1;
+  function sfxNeg() {                                                            // dissonant buzz (tritone)
+    if (clock - lastNegSfx < 0.06) return; lastNegSfx = clock;
+    tone(220, 200, 0.13, 'square', 0.07);
+    tone(311, 290, 0.13, 'square', 0.07);
+  }
   function sfxCannonHit() { tone(160, 60, 0.18, 'sawtooth', 0.15); noise(0.12, 'lowpass', 400, 0.15); }
   function sfxWin()  { var f = [523, 659, 784, 1047]; for (var i = 0; i < 4; i++) tone(f[i], f[i] * 1.01, 0.22, 'triangle', 0.15, i * 0.12); }
   function sfxLose() { var f = [392, 330, 262, 196]; for (var i = 0; i < 4; i++) tone(f[i], f[i] * 0.97, 0.3, 'sawtooth', 0.1, i * 0.18); }
@@ -221,13 +236,13 @@
   // ---------- State ----------
   var state = PLAYING;
   var level = 0;
-  var baseMaxHP = 40, baseHP = 40;
+  var baseMaxHP = 1000, baseHP = 1000;
   var cannonHP = CANNON_MAX_HP;
   var redInterval = 7, waveMin = 8, waveMax = 12, redSpeed = RED_SPEED_BASE;
   var cannonX = W / 2, targetX = W / 2;
   var fireAcc = 0, fireCount = 0;
   var redTimer = 1.5;
-  var hitFlash = 0, cannonFlash = 0;
+  var baseHeat = 0, ghostHP = 1000, cannonFlash = 0;   // baseHeat: damage flicker; ghostHP: chip-damage trail
   var gateFlash = new Float32Array(MAX_GATES);
   var blueCX = W / 2, blueN = 0;           // blue centroid from previous frame
   var autoFire = true, spawnerOn = true;   // toggled only by debug hooks
@@ -304,7 +319,7 @@
     state = PLAYING;
     fireAcc = 0; fireCount = 0;
     redTimer = 3;                      // grace period before the first wall
-    hitFlash = 0; cannonFlash = 0;
+    baseHeat = 0; ghostHP = baseHP; cannonFlash = 0;
     blueCX = W / 2; blueN = 0;
     for (var p = 0; p < POP_MAX; p++) popLife[p] = 0;
     gateCount = L.gates.length;
@@ -379,6 +394,10 @@
       G.x += G.vx * dt;
       if (G.x < G.min) { G.x = G.min; G.vx = Math.abs(G.vx); }
       else if (G.x > G.max) { G.x = G.max; G.vx = -Math.abs(G.vx); }
+      if (G.type === '-' && G.charges < G.n) {
+        G.charges += G.n * NEG_RECHARGE * dt;
+        if (G.charges > G.n) G.charges = G.n;
+      }
     }
 
     // Cannon eases toward target; fires ONLY while the player is touching/dragging.
@@ -435,6 +454,7 @@
       // Gates: circle-vs-rect overlap while moving up; each gate fires at most once per mob
       if (vy < 0) {
         var m = mmask[i];
+        var gateKilled = false;
         for (gi = 0; gi < gateCount; gi++) {
           var bit = 1 << gi;
           if (m & bit) continue;
@@ -442,15 +462,23 @@
           if (x + MOB_R >= gt.x && x - MOB_R <= gt.x + gt.w &&
               y + MOB_R >= gt.y - hh && y - MOB_R <= gt.y + hh) {
             mmask[i] = (m |= bit);
-            applyGate(i, gi, x, y);
+            if (gt.type === '-') {            // tax: destroys the mob while charges remain
+              if (gt.charges >= 1) { gt.charges -= 1; gateFlash[gi] = 1; sfxNeg(); gateKilled = true; break; }
+            } else if (gt.type === '/') {     // halve: every 2nd mob is destroyed
+              gt.flip ^= 1;
+              if (gt.flip) { gateFlash[gi] = 1; sfxNeg(); gateKilled = true; break; }
+            } else {
+              applyGate(i, gi, x, y);
+            }
           }
         }
+        if (gateKilled) { killMob(i); continue; }
       }
 
       // Opponent base
       if (y <= BASE_BOTTOM) {
         if (x >= 10 && x <= W - 10) {
-          baseHP--; hitFlash = 1;
+          baseHP--; baseHeat = baseHeat < 1 ? baseHeat + 0.12 : 1;
           killMob(i);
           if (baseHP <= 0) { baseHP = 0; endGame(WON); return; }
           continue;
@@ -499,7 +527,8 @@
               if (bdead[b]) continue;
               var dx = mx[b] - rx[r], dy = my[b] - ry[r];
               if (dx * dx + dy * dy <= HIT_R2) {
-                bdead[b] = 1; rdead[r] = 1; killedBlue++; killedRed++;
+                bdead[b] = 1; killedBlue++;
+                if (--rhp[r] === 0) { rdead[r] = 1; killedRed++; }   // first hit only wounds (orange)
                 spawnPop((mx[b] + rx[r]) * 0.5, (my[b] + ry[r]) * 0.5);
                 sfxHit();
                 break search;
@@ -522,7 +551,7 @@
         var wr = 0;
         for (i = 0; i < redCount; i++) {
           if (rdead[i]) continue;
-          if (wr !== i) { rx[wr] = rx[i]; ry[wr] = ry[i]; rvx[wr] = rvx[i]; }
+          if (wr !== i) { rx[wr] = rx[i]; ry[wr] = ry[i]; rvx[wr] = rvx[i]; rhp[wr] = rhp[i]; }
           rdead[wr] = 0;
           wr++;
         }
@@ -537,7 +566,7 @@
       if (ry[i] >= CANNON_Y) {
         spawnPop(rx[i], CANNON_Y);
         var l = --redCount;
-        if (i !== l) { rx[i] = rx[l]; ry[i] = ry[l]; rvx[i] = rvx[l]; }
+        if (i !== l) { rx[i] = rx[l]; ry[i] = ry[l]; rvx[i] = rvx[l]; rhp[i] = rhp[l]; }
         rdead[i] = 0;
         hits++;
       } else i++;
@@ -549,7 +578,8 @@
     }
 
     // Effects decay
-    if (hitFlash > 0) hitFlash = Math.max(0, hitFlash - dt * 6);
+    if (baseHeat > 0) baseHeat = Math.max(0, baseHeat - dt * 3);
+    if (ghostHP > baseHP) ghostHP += (baseHP - ghostHP) * Math.min(1, dt * 2.5);
     if (cannonFlash > 0) cannonFlash = Math.max(0, cannonFlash - dt * 3);
     for (gi = 0; gi < gateCount; gi++) if (gateFlash[gi] > 0) gateFlash[gi] = Math.max(0, gateFlash[gi] - dt * 4);
     for (i = 0; i < POP_MAX; i++) if (popLife[i] > 0) popLife[i] -= dt * 4;
@@ -565,6 +595,8 @@
     ctx.arcTo(x, y, x + w, y, r);
     ctx.closePath();
   }
+
+  function fmt(n) { return n >= 1000 ? ((n / 1000) | 0) + ',' + ('00' + (n % 1000)).slice(-3) : '' + n; }
 
   function render() {
     // Background
@@ -590,15 +622,20 @@
     ctx.setLineDash([]);
 
     // Opponent base
-    ctx.fillStyle = hitFlash > 0 ? '#ff8a8a' : '#d83a4a';
-    roundRect(10, BASE_Y, W - 20, BASE_H, 14);
+    // Damage flicker: strobes and shakes in proportion to the recent hit rate
+    var heatMix = baseHeat * (0.5 + 0.5 * Math.sin(clock * 55));
+    var shake = Math.sin(clock * 90) * baseHeat * 2;
+    ctx.fillStyle = 'rgb(' + ((216 + 39 * heatMix) | 0) + ',' + ((58 + 80 * heatMix) | 0) + ',' + ((74 + 64 * heatMix) | 0) + ')';
+    roundRect(10 + shake, BASE_Y, W - 20, BASE_H, 14);
     ctx.fill();
     ctx.fillStyle = '#fff';
     ctx.font = '700 28px system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(baseHP + ' HP', W / 2, BASE_Y + BASE_H / 2 - 6);
+    ctx.fillText(fmt(baseHP) + ' HP', W / 2 + shake, BASE_Y + BASE_H / 2 - 6);
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
     ctx.fillRect(30, BASE_Y + BASE_H - 14, W - 60, 6);
+    ctx.fillStyle = '#ffe27a';                       // chip-damage trail
+    ctx.fillRect(30, BASE_Y + BASE_H - 14, (W - 60) * (ghostHP / baseMaxHP), 6);
     ctx.fillStyle = '#7dff9a';
     ctx.fillRect(30, BASE_Y + BASE_H - 14, (W - 60) * (baseHP / baseMaxHP), 6);
 
@@ -606,15 +643,20 @@
     ctx.font = '800 22px system-ui, sans-serif';
     for (var gi = 0; gi < gateCount; gi++) {
       var g = GATES[gi], f = gateFlash[gi];
-      var isMul = g.type === 'x';
-      ctx.fillStyle = isMul ? 'rgba(60,160,255,' + (0.35 + f * 0.4) + ')' : 'rgba(90,230,140,' + (0.35 + f * 0.4) + ')';
+      var isMul = g.type === 'x', isNeg = g.type === '-' || g.type === '/';
+      ctx.fillStyle = isNeg ? 'rgba(255,70,90,' + (0.35 + f * 0.4) + ')'
+                    : isMul ? 'rgba(60,160,255,' + (0.35 + f * 0.4) + ')' : 'rgba(90,230,140,' + (0.35 + f * 0.4) + ')';
       roundRect(g.x, g.y - g.h / 2, g.w, g.h, 8);
       ctx.fill();
-      ctx.strokeStyle = isMul ? '#4db3ff' : '#6dffa6';
+      ctx.strokeStyle = isNeg ? '#ff4d5e' : isMul ? '#4db3ff' : '#6dffa6';
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.fillStyle = '#fff';
       ctx.fillText(g.label, g.x + g.w / 2, g.y + 1);
+      if (g.type === '-') {                          // remaining tax charges
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        ctx.fillRect(g.x + 8, g.y + g.h / 2 - 4, (g.w - 16) * (g.charges / g.n), 2);
+      }
     }
 
     // Blue mobs: one batched path, one fill
@@ -627,14 +669,17 @@
     }
     ctx.fill();
 
-    // Red mobs: batched
-    ctx.fillStyle = '#ff4d5e';
-    ctx.beginPath();
-    for (i = 0; i < redCount; i++) {
-      ctx.moveTo(rx[i] + RED_R, ry[i]);
-      ctx.arc(rx[i], ry[i], RED_R, 0, 6.2832);
+    // Red mobs: two batches (full health red, wounded orange)
+    for (var pass = 2; pass >= 1; pass--) {
+      ctx.fillStyle = pass === 2 ? '#ff4d5e' : '#ff9a3c';
+      ctx.beginPath();
+      for (i = 0; i < redCount; i++) {
+        if (rhp[i] !== pass) continue;
+        ctx.moveTo(rx[i] + RED_R, ry[i]);
+        ctx.arc(rx[i], ry[i], RED_R, 0, 6.2832);
+      }
+      ctx.fill();
     }
-    ctx.fill();
 
     // Collision pops
     ctx.lineWidth = 2;
@@ -697,9 +742,10 @@
       get: function () {
         return { mobCount: mobCount, redCount: redCount, baseHP: baseHP, cannonHP: cannonHP, state: state,
                  level: level, gateCount: gateCount, capBlue: MAX_MOBS, capRed: MAX_RED,
-                 redX: Array.prototype.slice.call(rx, 0, redCount), blueX: Array.prototype.slice.call(mx, 0, mobCount) };
+                 redX: Array.prototype.slice.call(rx, 0, redCount), redHP: Array.prototype.slice.call(rhp, 0, redCount), blueX: Array.prototype.slice.call(mx, 0, mobCount) };
       },
       aim: function (x) { targetX = x; cannonX = x; },
+      setBaseHP: function (n) { baseHP = n; ghostHP = n; },
       touch: function (b) { dragging = !!b; },
       spawnBlue: function (x, y, vx, vy, mask) { return spawnMob(x, y, vx, vy, mask || 0); },
       spawnRed: spawnRed,

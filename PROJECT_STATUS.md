@@ -4,7 +4,7 @@ _Last updated: 2026-10-05_
 
 | Field | Value |
 |-------|-------|
-| **Current Phase** | Phase 3 delivered (cannon shield, funneling, 3 levels, audio); pending device playtest and balance pass |
+| **Current Phase** | Phase 4 delivered (siege HP, negative gates, red shield); Phase 5 (100-level procedural) awaiting decisions |
 | **Active Focus** | Validate Phase 1 `index.html` on real phones; begin Phase 2 lane flow |
 | **Known Blockers** | None |
 
@@ -28,6 +28,11 @@ _Last updated: 2026-10-05_
 - [ ] Manual test on Android Chrome
 - [ ] Sustained 60 FPS confirmed with 500+ active mobs
 - [ ] Remote pushed to GitHub (requires valid `gh` auth)
+
+## Open decisions (blocking Phase 5)
+- Phase 5 asks for Base HP = 1000 + level*1250 (level 1 = 2,250), which conflicts with Phase 4's 1,000 / 3,500 / 10,000.
+- Measured clear times are much longer than the 25-40s target (L3 ~167s with perfect aim).
+- Boss/bumper/black-hole specs need a defined HP curve and pool budget first.
 
 ## Handoff Notes
 
