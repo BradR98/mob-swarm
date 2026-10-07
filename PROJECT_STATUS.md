@@ -4,7 +4,7 @@ _Last updated: 2026-10-05_
 
 | Field | Value |
 |-------|-------|
-| **Current Phase** | Phase 5 delivered (100-level procedural campaign, bosses, bumpers, black holes); balance tuning outstanding |
+| **Current Phase** | Phase 11 (discrete columns/trapdoors/barricades, `?level=N`) implemented, headless-verified, not device-tested. Earlier: Phase 5 delivered (100-level procedural campaign, bosses, bumpers, black holes); balance tuning outstanding |
 | **Active Focus** | Validate Phase 1 `index.html` on real phones; begin Phase 2 lane flow |
 | **Known Blockers** | None |
 

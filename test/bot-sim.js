@@ -11,10 +11,13 @@ sb.window.window = sb.window; vm.createContext(sb); vm.runInContext(src, sb); co
 function predict(G, t) { const span = G.max - G.min; if (span <= 0) return G.x; let d = (G.x - G.min) + G.vx * t; const per = 2 * span; d = ((d % per) + per) % per; if (d > span) d = per - d; return G.min + d; }
 // Choose the lane that maximises the predicted multiplier product through all gates.
 function smartAim(q) {                       // terrain-aware: traces where a shot launched at x really crosses each gate row
-  let best = 180, bs = -1;
+  let best = (q.AX0 + q.AX1) / 2, bs = -1;
+  { let ly = 0, lx = -1; for (let k = 0; k < q.redCount; k++) if (q.redY[k] > ly) { ly = q.redY[k]; lx = q.redX[k]; }   // defend: shoot at the lowest red when it gets close
+    if (ly > 300) { const c = g.colOf(lx); return Math.max(q.colX0[c] + 4, Math.min(q.colX1[c] - 4, lx)); } }
   const ys = []; for (let gi = 0; gi < q.gateCount; gi++) ys.push(g.gates[gi].y);
   const bossT = q.isBoss && q.bossActive; if (bossT) ys.push(108);      // also aim the stream at the boss hull
-  for (let x = 20; x <= 340; x += 6) {
+  for (let x = q.AX0 + 8; x <= q.AX1 - 8; x += 6) {
+    if (x < q.colX0[g.colOf(x)] + 4 || x > q.colX1[g.colOf(x)] - 4) continue;
     let sc = 1;
     const tr = g.traceBlue(x, ys);
     for (let gi = 0; gi < q.gateCount; gi++) {
@@ -22,7 +25,7 @@ function smartAim(q) {                       // terrain-aware: traces where a sh
       if (px >= gx - 4 && px <= gx + G.w + 4) sc *= G.type === 'x' ? G.n : G.type === '+' ? G.n + 1 : G.type === '/' ? 0.5 : 0.6;
     }
     if (bossT && Math.abs(tr.x[q.gateCount] - q.bossX) > 76) sc *= 0.05;
-    sc -= Math.abs(x - 180) * 1e-4;
+    sc -= Math.abs(x - (q.AX0 + q.AX1) / 2) * 1e-4;
     if (sc > bs) { bs = sc; best = x; }
   }
   return best;
@@ -31,7 +34,7 @@ function play(n, { spawner = true, cap = 600 } = {}) {
   g.setLevel(n); g.setFlags({ fire: true, spawner }); g.touch(true);
   let t = 0, peakR = 0, minCannon = 5, maxMobs = 0;
   while (g.get().state === 0 && t < 60 * cap) {
-    if (t % 6 === 0) g.aim(Math.max(16, Math.min(344, smartAim(g.get()))));
+    if (t % 6 === 0) g.aim(Math.max(0, Math.min(360, smartAim(g.get()))));
     g.update(1 / 60); t++;
     if (t % 6 === 0) { const q = g.get(); peakR = Math.max(peakR, q.redCount); minCannon = Math.min(minCannon, q.cannonHP); maxMobs = Math.max(maxMobs, q.mobCount); }
   }
@@ -44,7 +47,7 @@ function playPure(n) {            // no red waves; boss levels get the boss spaw
   g.setLevel(n); g.setFlags({ fire: true, spawner: false }); g.touch(true);
   if (g.get().isBoss) g.spawnBoss();
   let t = 0;
-  while (g.get().state === 0 && t < 60 * 300) { if (t % 6 === 0) g.aim(Math.max(16, Math.min(344, smartAim(g.get())))); g.update(1 / 60); t++; }
+  while (g.get().state === 0 && t < 60 * 300) { if (t % 6 === 0) g.aim(Math.max(0, Math.min(360, smartAim(g.get())))); g.update(1 / 60); t++; }
   return { won: g.get().state === 1, secs: t / 60 };
 }
 const R = +process.argv[2] || 10;

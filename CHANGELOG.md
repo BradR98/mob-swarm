@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Phase 11 - discrete columns, trapdoors, barricades, level warp
+- **Pivot:** the Phase 10 carved-lane terrain and open-field slide generator are replaced by a discrete column grid (1-4 vertical lanes, 8px dividers). L1-8: 1 narrow centre column (rest letterboxed/grayed); L9-16: 2; L17-24: 3; L25+: 4.
+- **Cannon:** drags across the active span; shots are clamped into the column the cannon aligns with. Gates are bound to a column; every column has an `x` gate.
+- **Red dispatch:** per-column queues and pipes. Waves alternate columns (1-2 columns at once on 1-4 cols, up to 3 at L41+). Boss waves come from the hull's column.
+- **Trapdoors:** staggered breaks in the dividers (2+ columns). Reds crossing a gap leak sideways at 25-40% (`L.leakP`) into the neighbour column.
+- **Barricades:** gray (absorbs), blue (shatters into blues upward), red (shatters into reds downward), with visible hit counters. Replace the old indestructible terrain.
+- **`?level=N`:** dev warp, e.g. `index.html?level=20`.
+- Balance tweaks from sims: red barricade bursts capped at 10, first-wave grace 3+2.5*(cols-1)s, big waves fan out (<=~16 reds per column).
+- Known: bot-sim L16 (2 cols, 6584 HP) is still 0/3 for a single-target bot; boss TTK 53-79s vs 45s target. Not device-tested.
+- Tests: headless suite now 148 checks, including level warp, column containment and the trackpad deadzone. Sims aim per column.
+
 ### Phase 8 - terrain, fluid pathing, supply crates
 - **Terrain:** solid indestructible gray oriented rectangles (typed arrays, max 8). Circle-vs-OBB resolve pushes mobs out along the surface normal and strips only the velocity component into the wall, so blues and reds slide instead of bouncing. A minimum tangential slide speed (toward the nearer end of the slab) stops mobs stalling on flat faces.
 - **Layouts in `generateLevel`:** central pillars, angled funnels (56px mouth) and zig-zag baffles, placed in the free bands above and below the gate rows (none on L1). Crowded boards drop overlapping bumpers rather than lose the terrain. HP derates 7% per piece.

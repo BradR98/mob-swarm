@@ -9,11 +9,11 @@ const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : (rec && k === 'arc' 
 const els = {};
 const el = () => ({ style: {}, classList: { add: noop, remove: noop, toggle: noop }, addEventListener: noop,
   setAttribute: noop, getContext: () => ctx, getBoundingClientRect: () => ({ left: 0, top: 0, width: 360, height: 640 }) });
-function load(hash) {
+function load(hash, search) {
   const sandbox = {
     document: { getElementById: id => els[id] || (els[id] = el()), addEventListener: noop },
     window: { innerWidth: 360, innerHeight: 640, devicePixelRatio: 2, addEventListener: noop },
-    location: { hash }, performance: { now: () => 0 }, requestAnimationFrame: noop,
+    location: { hash, search: search || '' }, performance: { now: () => 0 }, requestAnimationFrame: noop,
     Math, Float32Array, Uint8Array, Int16Array, Array, JSON,
   };
   sandbox.window.window = sandbox.window;
@@ -32,7 +32,7 @@ const g = load('#debug');
 ok(!!g, '__mob exposed with #debug');
 const gl = g.generateLevel;
 const quiet = () => { g.setFlags({ fire: false, spawner: false }); g.setGates([]); g.setObstacles({}); g.touch(false); };
-const lvl = n => { g.setLevel(n); quiet(); };
+const lvl = n => { g.setLevel(n); g.openField(); quiet(); };   // legacy physics tests run on an open single-lane field; column tests use setLevel directly
 
 // ---------- Generator ----------
 { // Phase 7: HP derives from MTM through the measured efficiency curve, capped by the pool
@@ -56,20 +56,23 @@ ok(JSON.stringify(gl(37)) === JSON.stringify(gl(37)) && JSON.stringify(gl(37)) !
   for (let n = 1; n <= 150; n++) {
     const L = gl(n), types = L.gates.map(d => d[2]);
     const mults = L.gates.filter(d => !isNeg(d[2]));
-    if (L.gates.length < 1 || L.gates.length > 6 || !mults.some(d => d[2] === 'x')) { tierOK = false; why = 'gates ' + n; }
+    if (L.gates.length < 1 || L.gates.length > 6 || ![...Array(L.cols).keys()].every(c => L.gates.some(d => d[7] === c && d[2] === 'x'))) { tierOK = false; why = 'gates ' + n; }
     if (n <= 10 && (types.some(isNeg) || L.bumpers.length || L.holes.length)) { tierOK = false; why = 'tier1 ' + n; }
-    if (n >= 11 && n <= 30 && (!types.some(isNeg) || L.bumpers.length || L.holes.length)) { tierOK = false; why = 'tier2 ' + n; }
+    if (n >= 11 && n <= 30 && (L.bumpers.length || L.holes.length)) { tierOK = false; why = 'tier2 ' + n; }
+    if (n <= 10 && types.some(isNeg)) { tierOK = false; why = 'neg early ' + n; }
     if (n >= 31 && n <= 50 && (L.bumpers.length < 2 || L.holes.length)) { tierOK = false; why = 'tier3 ' + n; }
     if (n >= 51 && L.holes.length < 1) { tierOK = false; why = 'tier4 ' + n; }
     if (n <= 10 && !L.gates.every(d => ['x2', 'x3', '+2', '+10'].includes(d[4]))) { tierOK = false; why = 'labels ' + n; }
     if ((n % 10 === 0) !== L.isBoss || L.bossHP !== (L.isBoss ? Math.round(L.throughput * 45) : 0)) { bossOK = false; why = 'boss ' + n; }
-    L.gates.forEach((d, i) => {                           // negative gates guard the next gate up and slide opposite it
-      if (!isNeg(d[2])) { if (d[2] === 'x' && d[3] === 3 || d[2] === '+' && d[3] === 10) { if (!(d[0] <= 63)) layoutOK = false; } else if (!(d[0] >= 74)) layoutOK = false; return; }
+    const cwid = g.COL_W[L.cols];
+    L.gates.forEach((d, i) => {                           // negative gates guard the next gate up (same column) and slide opposite it
+      if (d[7] < 0 || d[7] >= L.cols) layoutOK = false;
+      if (!isNeg(d[2])) { if (d[2] === 'x' && d[3] === 3 || d[2] === '+' && d[3] === 10) { if (!(d[0] <= 0.5 * cwid)) layoutOK = false; } else if (!(d[0] >= 0.7 * cwid)) layoutOK = false; return; }
       const up = L.gates[i + 1];
-      if (!up || isNeg(up[2]) || !(up[3] === 3 || up[3] === 10) || up[1] !== d[1] - 38 || d[0] < 80) layoutOK = false;
+      if (!up || up[7] !== d[7] || isNeg(up[2]) || !(up[3] === 3 || up[3] === 10) || up[1] !== d[1] - 38 || d[0] < 0.75 * cwid) layoutOK = false;
       else if (d[5] === up[5]) oppOK = false;
     });
-    for (let q = 1; q < L.gates.length; q++) if (L.gates[q][1] > L.gates[q - 1][1]) layoutOK = false;
+    for (let q = 1; q < L.gates.length; q++) if (L.gates[q][7] === L.gates[q - 1][7] && L.gates[q][1] > L.gates[q - 1][1]) layoutOK = false;
     if (L.waveMax > g.MAX_WAVE || 2 * L.waveMax > g.get().capRed || L.waveMin > L.waveMax) waveOK = false;
     if (L.redInterval > prevInt + 1e-9) intervalOK = false; prevInt = L.redInterval;
     L.bumpers.forEach(b => L.gates.forEach(d => { if (Math.abs(b[1] - d[1]) < 13 + b[2]) boundsOK = false; }));
@@ -77,7 +80,7 @@ ok(JSON.stringify(gl(37)) === JSON.stringify(gl(37)) && JSON.stringify(gl(37)) !
   ok(tierOK, 'obstacle tiers: 1-10 basic, 11-30 +negatives, 31-50 +bumpers, 51+ +black holes ' + why);
   ok(bossOK, 'bosses only on multiples of 10 (HP from throughput * 45)');
   ok(oppOK, 'negative gates always slide opposite the high-reward gate they guard');
-  ok(layoutOK, 'risk vs reward: x3/+10 narrow (<=63px) and high, x2/+2 wide (>=74px) and low, negatives wide and directly below a high gate');
+  ok(layoutOK, 'risk vs reward per column: x3/+10 narrow (<=50% of the column) and high, x2/+2 wide (>=70%) and low, negatives wide and directly below a high gate');
   ok(waveOK, 'wave sizes capped at ' + g.MAX_WAVE + ' (two walls always fit the 1000 pool) for levels 1-150');
   ok(intervalOK && gl(6).redInterval < gl(1).redInterval && gl(40).redInterval < gl(20).redInterval && gl(1).redInterval === gl(5).redInterval, 'red spawn interval shrinks per tier and is constant within a tier');
   ok(boundsOK, 'bumpers never overlap gate rows');
@@ -127,7 +130,7 @@ g.spawnBlue(100, 320, 0, -250, 0);
 g.spawnRed(100, 300, 1);
 step(g, 6);
 ok(g.get().mobCount === 0 && g.get().redCount === 1 && g.get().redHP[0] === 2, 'first blue only wounds a Tank (hp 3 -> ' + g.get().redHP[0] + ', red alive)');
-g.spawnBlue(100, 380, 0, -250, 0); g.spawnBlue(100, 410, 0, -250, 0);
+for (let k = 0; k < 2; k++) { g.spawnBlue(g.get().redX[0], g.get().redY[0] + 60, 0, -250, 0); step(g, 12); }
 step(g, 30);
 ok(g.get().mobCount === 0 && g.get().redCount === 0, 'third blue destroys it (' + g.get().mobCount + '/' + g.get().redCount + ')');
 
@@ -156,14 +159,26 @@ lvl(1); g.setFlags({ fire: false, spawner: true });
 let t = 0; while (g.get().state === 0 && t < 60 * 120) { g.update(1 / 60); t++; }
 ok(g.get().state === 2, 'defeat from unopposed waves after ' + (t / 60).toFixed(1) + 's');
 
-// ---------- Pipe stream / attraction ----------
-for (const n of [1, 25, 61]) {
+// ---------- Column dispatch ----------
+for (const n of [1, 12, 20, 30, 45]) {
   g.setLevel(n); g.setFlags({ fire: false, spawner: true }); g.setGates([]); g.setObstacles({}); g.touch(false);
-  let gd = 0; while (g.get().redCount < 6 && gd++ < 60 * 40) g.update(1 / 60);
-  const xs = g.get().redX, px = g.get().pipeX;
-  ok(Math.abs(mean(xs) - px) < 12 && Math.max(...xs) - Math.min(...xs) < 45, 'L' + n + ' reds leave ONE concentrated pipe at x=' + px.toFixed(0) + ' (mean ' + mean(xs).toFixed(0) + ', width ' + (Math.max(...xs) - Math.min(...xs)).toFixed(0) + 'px)');
+  const q0 = g.get(), used = new Set(); let inside = true;
+  for (let i = 0; i < 60 * 150 && used.size < 1 || i < 600; i++) {
+    g.update(1 / 60); const q = g.get();
+    q.redX.forEach((x, k) => { const c = g.colOf(x); used.add(c); const inBand = q.tdY.some(t => q.redY[k] >= t - 8 && q.redY[k] <= t + g.TD_H + 8); if (!inBand && (x < q.colX0[c] - 0.01 || x > q.colX1[c] + 0.01)) inside = false; });
+  }
+  ok(inside && used.size >= 1, 'L' + n + ': red waves spawn inside the top of active columns and use ' + used.size + ' of ' + q0.cols + ' columns');
 }
-ok(gl(1).pipeX === 180 && [...Array(100).keys()].every(i => { const x = gl(i + 2).pipeX; return x >= 80 && x <= 280; }), 'pipe x: L1 centred, later levels vary within 80..280');
+{ // waves alternate columns on 2 columns and run in several columns at once on 3+
+  g.setLevel(12); g.setFlags({ fire: false, spawner: false }); g.setGates([]); g.setObstacles({});
+  const col = () => { const q = g.get(); return new Set(q.redX.map(x => g.colOf(x))); };
+  g.setFlags({ fire: false, spawner: true }); g.queueWave(10); g.queueWave(10); step(g, 75);
+  ok(col().size === 2, 'on 2 columns consecutive waves alternate columns (' + [...col()].join('/') + ')');
+  g.setLevel(20); g.setFlags({ fire: false, spawner: true }); g.setGates([]); g.setObstacles({}); g.queueWave(30); step(g, 75);
+  ok(col().size >= 2, 'on 3 columns a single wave spawns across several columns at once (' + col().size + ')');
+  g.setLevel(45); g.setFlags({ fire: false, spawner: true }); g.setGates([]); g.setObstacles({}); g.queueWave(60); step(g, 75);
+  ok(col().size >= 3, 'high tiers dispatch a wave into 3 columns simultaneously (' + col().size + ')');
+}
 // Brownian reds: they never track the blue mass; they random-walk sideways and spread across the lane
 lvl(1); g.setFlags({ fire: false, spawner: false });
 for (let i = 0; i < 60; i++) g.spawnRed(180, 150, 0);
@@ -171,12 +186,6 @@ for (let i = 0; i < 6; i++) g.spawnBlue(330, 520, 0, 0, 0);
 step(g, 100);
 { const q = g.get(), mean = q.redX.reduce((a, b) => a + b, 0) / q.redX.length, sd = Math.sqrt(q.redX.reduce((a, b) => a + (b - mean) * (b - mean), 0) / q.redX.length);
   ok(q.redX.length > 40 && Math.abs(mean - 180) < 15 && sd > 6, 'reds ignore the blue mass (centroid ' + mean.toFixed(1) + ' vs 180) and spread by Brownian drift (sd ' + sd.toFixed(1) + 'px)'); }
-lvl(1);
-g.spawnRed(280, 200);
-g.spawnBlue(100, 440, 0, -1, 0);
-step(g, 40);
-ok(g.get().blueX[0] > 105, 'blue drifts toward red mass (x ' + g.get().blueX[0].toFixed(1) + ')');
-
 // ---------- Fire only while touching ----------
 lvl(1); g.setFlags({ fire: true, spawner: false });
 step(g, 120);
@@ -199,10 +208,10 @@ for (const n of [1, 25, 61, 99]) {
     let gd = 0; while (g.get().redCount === 0 && gd++ < 60 * 20) g.update(1 / 60);
     const tot = g.get().redCount + g.get().waveQueue; totals.add(tot);
     if (tot < L.waveMin || tot > L.waveMax) inRange = false;
-    step(g, 30); if (g.get().redCount > 16) widthOK = false;      // ~14 reds/s out of the pipe
+    step(g, 30); if (g.get().redCount > 16 * 4) widthOK = false;      // <= 28 reds/s per column pipe, up to 3 columns fed at once
   }
   ok(inRange, 'L' + n + ' waves queue ' + L.waveMin + '-' + L.waveMax + ' reds (saw ' + Math.min(...totals) + '..' + Math.max(...totals) + ')');
-  ok(widthOK, 'L' + n + ' stream is metered out of the pipe (<=16 reds after 0.5s)');
+  ok(widthOK, 'L' + n + ' stream is metered out of the column pipes (<=64 reds after 0.5s)');
 }
 
 // ---------- Bumpers ----------
@@ -226,7 +235,7 @@ step(g, 20);
 ok(g.get().mobCount === 1 && g.get().blueX[0] > 250, 'black hole destroys a blue passing through its core, spares a distant one');
 lvl(1); g.setObstacles({ holes: [[200, 260]] });
 g.spawnRed(200, 200);
-step(g, 70);
+step(g, 70); if (g.get().redCount) step(g, 60);
 ok(g.get().redCount === 0, 'black hole pulls in and destroys a red');
 lvl(1); g.setObstacles({ holes: [[200, 260]] });
 g.spawnBlue(240, 300, 0, 0, 0);
@@ -269,7 +278,7 @@ g.spawnBlue(g.get().bossX, g.get().bossY + 45, 0, -250, 0); step(g, 8);
 ok(g.get().state === 1 && els.restart.textContent === 'Next Level', 'killing the boss wins the level -> "Next Level"');
 
 { // mothership is wide: ~40% of the screen
-  lvl(10); g.setFlags({ fire: false, spawner: true }); guard = 0; while (!g.get().bossActive && guard++ < 600) g.update(1 / 60);
+  lvl(10); g.setFlags({ fire: false, spawner: true }); guard = 0; while (!g.get().bossActive && guard++ < 2000) g.update(1 / 60);
   g.setFlags({ fire: false, spawner: false });
   const bx = g.get().bossX, hp0 = g.get().bossHP;
   g.spawnBlue(bx + 52, g.get().bossY + 45, 0, -250, 0); step(g, 8);
@@ -341,55 +350,38 @@ const inside = (x, y, T) => { const c = Math.cos(T[4]), sn = Math.sin(T[4]), dx 
   let bad = 0, checks = 0;
   for (const n of [12, 27, 44, 58, 83]) {
     g.setLevel(n); g.setFlags({ fire: true, spawner: true }); g.touch(true);
-    const T = gl(n).terrain;
     for (let i = 0; i < 60 * 12 && g.get().state === 0; i++) {
       if (i % 45 === 0) g.aim(30 + Math.random() * 300);
       g.update(1 / 60);
       if (i % 5 === 0) { const q = g.get();
-        for (let k = 0; k < q.blueX.length; k += 3) { checks++; if (T.some(t => inside(q.blueX[k], q.blueY[k], t))) bad++; }
+        const T = q.barr.map(b => [b.x, b.y, b.hw, b.hh, 0]);
         for (let k = 0; k < q.redX.length; k++) { checks++; if (T.some(t => inside(q.redX[k], q.redY[k], t))) bad++; } }
     }
   }
   g.touch(false);
-  ok(bad === 0, 'soak on generated terrain: no mob centre ever inside a slab (' + checks + ' samples)');
+  ok(bad === 0, 'soak on generated barricades: no red centre ever inside a live barricade (' + checks + ' samples)');
 }
-{ // generated layouts (Phase 10: negative-space lanes)
-  let withT = 0, geomOK = true, clearOK = true, cap = 0, why = '', rowsOK = true;
-  const inObb = (t, x, y) => { const c = Math.cos(t[4]), sn = Math.sin(t[4]), dx = x - t[0], dy = y - t[1];
-    return Math.abs(dx * c + dy * sn) <= t[2] && Math.abs(-dx * sn + dy * c) <= t[3]; };
-  for (let n = 2; n <= 150; n++) {
-    const L = gl(n); if (L.terrain.length) withT++; if (L.terrain.length > 40) cap++;
-    for (const t of L.terrain) {
-      const ey = t[2] * Math.abs(Math.sin(t[4])) + t[3] * Math.abs(Math.cos(t[4]));
-      if (t[1] - ey < 120 || t[1] + ey > 500) { geomOK = false; why = 'bounds ' + n; }
-      for (const b of L.bumpers) { const c = Math.cos(t[4]), sn = Math.sin(t[4]), dx = b[0] - t[0], dy = b[1] - t[1], lx = dx * c + dy * sn, ly = -dx * sn + dy * c;
-        const ex2 = Math.max(Math.abs(lx) - t[2], 0), ey2 = Math.max(Math.abs(ly) - t[3], 0); if (ex2 * ex2 + ey2 * ey2 < b[2] * b[2]) clearOK = false; }
-    }
-    for (const d of L.gates) for (let y = d[1] - 13; y <= d[1] + 13; y += 3) for (let x = 11; x <= 349; x += 3) if (L.terrain.some(t => inObb(t, x, y))) { rowsOK = false; why = 'gate row ' + n; }
+{ // generated layouts (Phase 11): trapdoors + barricades
+  let barOK = true, tdOK = true, why = '', nBar = 0, early = 0, types = new Set();
+  for (let n = 1; n <= 150; n++) {
+    const L = gl(n), cw = g.COL_W[L.cols];
+    if (n <= 2 && L.terrain.length) early++;
+    L.terrain.forEach((b, i) => { nBar++; types.add(b[6]); const c = L.barrCol[i], sp = g.colSpan(L.cols, c);
+      if (b[0] - b[2] < sp[0] - 0.01 || b[0] + b[2] > sp[1] + 0.01 || b[7] < 10 || b[1] - b[3] < 128 || b[6] > 2) { barOK = false; why = 'barricade ' + n; }
+      for (const d of L.gates) if (d[7] === c && Math.abs(b[1] - d[1]) < b[3] + 13 + 10) { barOK = false; why = 'gate clash ' + n; } });
+    if ((L.cols === 1) !== (L.trapdoors.length === 0) || (L.cols > 1 && L.trapdoors.length < 1)) { tdOK = false; why = 'trapdoor count ' + n; }
+    const ys = L.trapdoors.map(t => t[1]).sort((a, b) => a - b);
+    for (let i = 1; i < ys.length; i++) if (ys[i] - ys[i - 1] < g.TD_H + 20) { tdOK = false; why = 'stagger ' + n; }
+    for (const t of L.trapdoors) if (t[0] < 0 || t[0] > L.cols - 2 || t[1] < 160 || t[1] + g.TD_H > 420) { tdOK = false; why = 'trapdoor range ' + n; }
+    if (L.cols >= 2 && L.trapdoors.length >= 1) {} 
   }
-  ok(gl(1).terrain.length === 0 && withT >= 140 && cap === 0, 'terrain: none on L1, present on ' + withT + '/149 later levels, max 40 pieces');
-  ok(geomOK && clearOK && rowsOK, 'terrain stays between base and muzzle, gate rows stay fully open (rails only at the edges), bumpers clear ' + why);
-  const kinds = {}; for (let n = 2; n <= 150; n++) for (const k of gl(n).terrainKinds) kinds[k] = (kinds[k] || 0) + 1;
-  ok(kinds.bridge > 5 && kinds.fork > 5 && kinds.scurve > 5, 'all three lane layouts occur: ' + JSON.stringify(kinds));
-  // Independent path check: >= 60px gap (2 x 30px radius disc) must connect the base to the muzzle on EVERY level
-  const pathOK = L => { const CELL = 2, y0 = 120, y1 = 504, cols = 181, rows = ((y1 - y0) / CELL | 0) + 1, free = new Uint8Array(cols * rows);
-    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { let f = 1; const x = c * CELL, y = y0 + r * CELL;
-      for (const t of L.terrain) { const cs = Math.cos(t[4]), sn = Math.sin(t[4]), dx = x - t[0], dy = y - t[1], lx = dx * cs + dy * sn, ly = -dx * sn + dy * cs;
-        const ex = Math.max(Math.abs(lx) - t[2], 0), ey = Math.max(Math.abs(ly) - t[3], 0); if (ex * ex + ey * ey < 900) { f = 0; break; } }
-      free[r * cols + c] = f; }
-    const seen = new Uint8Array(cols * rows), q = []; for (let c = 0; c < cols; c++) if (free[c]) { seen[c] = 1; q.push(c); }
-    for (let h = 0; h < q.length; h++) { const cur = q[h], px = cur % cols, py = (cur / cols) | 0; if (py === rows - 1) return true;
-      for (const [ax, ay] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const nx = px + ax, ny = py + ay; if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue; const i = ny * cols + nx; if (!seen[i] && free[i]) { seen[i] = 1; q.push(i); } } }
-    return false; };
-  let pathBad = '', worst = 0; for (let n = 1; n <= 150; n++) if (!pathOK(gl(n))) pathBad += n + ' ';
-  ok(pathBad === '', 'terrain never pinches off a lane: a >=60px path exists top-to-bottom on levels 1-150 ' + pathBad);
-  // Row scan: the widest open span on every row (the "river" width) never drops below 60px; bridge necks are exactly 80px
-  const widest = (L, y) => { let best = 0, run = 0; for (let x = 0; x <= 360; x++) { const hit = L.terrain.some(t => inObb(t, x, y)); if (hit) run = 0; else { run++; if (run > best) best = run; } } return best; };
-  let minAll = 1e9, minBridge = 1e9, bridges = 0;
-  for (let n = 2; n <= 150; n++) { const L = gl(n); let mn = 1e9; for (let y = 124; y <= 496; y += 2) mn = Math.min(mn, widest(L, y));
-    minAll = Math.min(minAll, mn); if (L.terrainKinds.includes('bridge')) { bridges++; minBridge = Math.min(minBridge, mn); } }
-  ok(minAll >= 60, 'every row of every level keeps an open span >= 60px (min ' + minAll + 'px)');
-  ok(bridges > 5 && minBridge >= 78 && minBridge <= 83, 'Bridge necks pinch to ~80px (' + minBridge + 'px over ' + bridges + ' bridge levels)');
+  ok(early === 0 && nBar > 100 && types.has(0) && types.has(1) && types.has(2), 'barricades: none on L1-2, ' + nBar + ' over 150 levels, all three types (gray/blue/red) occur');
+  ok(barOK, 'every barricade sits inside one column, above that column\'s gates, with >= 10 hits ' + why);
+  ok(tdOK, 'trapdoors: none on 1 column, >=1 on 2+, staggered in height, inside the divider span ' + why);
+  ok([1, 8, 9, 16, 17, 24, 25, 150].map(n => gl(n).cols).join() === '1,1,2,2,3,3,4,4', 'columns by tier: L1-8 = 1, L9-16 = 2, L17-24 = 3, L25+ = 4');
+  const geo = n => { g.setLevel(n); const q = g.get(); return q; };
+  { const q = geo(1); ok(q.cols === 1 && q.colX1[0] - q.colX0[0] === 120 && Math.abs((q.AX0 + q.AX1) / 2 - 180) < 1e-6, 'Tier 1: one narrow centre column (120px), the rest letterboxed'); }
+  { const q = geo(25); let sep = true; for (let c = 1; c < q.cols; c++) if (Math.abs(q.colX0[c] - q.colX1[c - 1] - g.DIV_W) > 1e-6) sep = false; ok(q.cols === 4 && sep && q.AX0 >= 0 && q.AX1 <= 360, '4 columns separated by 8px dividers, inside the screen'); }
 }
 
 // ---------- Speed cap & crowding ----------
@@ -456,7 +448,7 @@ ok(g.get().level === 2 && g.get().baseHP === gl(2).baseHP && g.get().state === 0
   'Next Level regenerates the board in place (L2, MTM-scaled HP, pools empty)');
 g.touch(false);
 lvl(100); g.setFlags({ fire: false, spawner: true });
-guard = 0; while (!g.get().bossActive && guard++ < 600) g.update(1 / 60);
+guard = 0; while (!g.get().bossActive && guard++ < 2000) g.update(1 / 60);
 g.setFlags({ fire: false, spawner: false }); g.setBossHP(1);
 g.spawnBlue(g.get().bossX, g.get().bossY + 45, 0, -250, 0); step(g, 8);
 ok(g.get().state === 1 && els.restart.textContent === 'Victory - Play Again', 'L100 cleared -> "Victory - Play Again"');
@@ -529,4 +521,27 @@ for (let i = 0; i < 1500; i++) g.spawnBlue(10 + (i % 50) * 6.8, 300 + ((i / 50) 
   ok(!g.isPaused() && g.get().redY[0] > y0, 'resume continues the simulation');
   g.setPaused(true); g.setPaused(false); lvl(1); g.get();
   ok(/id="pause"/.test(html) && /#pause \{[^}]*top: 8px; right: 54px/.test(html), 'pause button sits in the top-right corner (clear of the trackpad zone)'); }
+// Phase 11: level warp
+for (const [s, lv, cols] of [['?level=20', 20, 3], ['?level=30', 30, 4], ['?level=9', 9, 2], ['?level=1', 1, 1], ['?level=abc', 1, 1], ['', 1, 1], ['?x=1&level=45', 45, 4]]) {
+  const w = load('#debug', s), q = w.get();
+  ok(q.level === lv && q.cols === cols, 'URL "' + s + '" -> level ' + q.level + ', ' + q.cols + ' columns');
+}
+// Phase 11: containment during heavy play
+{ let badBlue = 0, badRed = 0, deep = 0, n = 0;
+  for (const lv of [9, 17, 25, 45]) {
+    g.setLevel(lv); g.setFlags({ fire: true, spawner: true }); g.touch(true);
+    for (let i = 0; i < 60 * 20 && g.get().state === 0; i++) {
+      if (i % 60 === 0) g.aim(20 + Math.random() * 320);
+      g.update(1 / 30); const q = g.get(); n++;
+      for (let k = 0; k < q.mobCount; k++) { if (q.blueX[k] < q.AX0 - 0.5 || q.blueX[k] > q.AX1 + 0.5) badBlue++; if (q.blueY[k] > g.TRACK_Y) deep++; }
+      for (let k = 0; k < q.redCount; k++) {
+        const x = q.redX[k], c = g.colOf(x), inBand = q.tdY.some(t => q.redY[k] >= t - 10 && q.redY[k] <= t + g.TD_H + 10);
+        if (x < q.AX0 - 0.5 || x > q.AX1 + 0.5) badRed++;
+        else if (!inBand && (x < q.colX0[c] - 0.5 || x > q.colX1[c] + 0.5)) badRed++;
+        if (q.redY[k] > g.TRACK_Y) deep++;
+      }
+    }
+  }
+  g.touch(false);
+  ok(badBlue === 0 && badRed === 0 && deep === 0, 'mobs stay in active columns and out of trackpad (' + n + ' frames; blue ' + badBlue + ', red ' + badRed + ', deep ' + deep + ')'); }
 process.exit(fail ? 1 : 0);

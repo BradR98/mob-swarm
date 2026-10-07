@@ -52,3 +52,7 @@ Full offline install (PWA manifest + service worker) is planned for Phase 5. See
 ## License
 
 TBD.
+
+## Dev level warp
+
+Open `index.html?level=20` to start directly at level 20 (3 columns). Columns: L1-8 one, L9-16 two, L17-24 three, L25+ four.

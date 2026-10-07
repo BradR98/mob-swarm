@@ -67,3 +67,14 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done. Suggested model: **Sonnet** =
 - Keep every phase deliverable independently committable. Commit at the end of each task so work resumes cleanly on a different model.
 - When quota is hit: switch Sonnet to Gemini Pro (implementation), then to Flash (docs and small edits). If all are exhausted, pause and resume next session from `PROJECT_STATUS.md`.
 - Keep `PROJECT_STATUS.md` updated after each session as the handoff note.
+
+## Phase 11: Discrete Columns
+
+| ID | Task | Status | Model |
+|----|------|--------|-------|
+| P11-1 | `?level=N` warp | [x] | Sonnet |
+| P11-2 | 1-4 column grid by tier | [x] | Pro |
+| P11-3 | Per-column red dispatch | [x] | Pro |
+| P11-4 | Trapdoor leaks | [x] | Pro |
+| P11-5 | Gray/blue/red barricades | [x] | Pro |
+| P11-6 | Real-device playtest of columns, leaks, FPS | [ ] | - |
