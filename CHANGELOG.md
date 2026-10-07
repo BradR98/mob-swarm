@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Phase 12 - aggressive pacing and threat budgeting
+- **Level selector:** Level input + Warp button on the Pause/Victory/Defeat overlay, plus a new Main Menu (Start + warp) on load. `?level=N` still works but no longer needed (the SW stripped it). Debug hook `__mob.warp(n)`.
+- **Columns:** L1-2 = 1, L3-5 = 2, L6-9 = 3, L10+ = 4.
+- **Cleanup:** red pipe/chute graphics removed; L1-2 have no gates at all (strict 1.0x start, 9 shots/s, 1 pellet) and no supply crates; L1-2 spawn only gray barricades. First-wave grace 2s, base wave interval 5s (was 7s).
+- **Threat Budget:** each Blue Barricade generates a red wave (size = round(hits x 1.0), 8-24) in an ADJACENT column. Released 10s after play starts, at 14 reds/s. Never generated on single-column levels. Boss levels get no blue barricades (the boss is the threat).
+- **Anti-stacking:** at most one Blue Barricade per column per level.
+- 4-column levels hit the 6-gate bit limit, so negative gates are trimmed there (known side effect).
+- Tests: 163 headless checks. Sim (single-target bot): boss fights 4/4; L1 3/3, L6 1/3, L16 0/3 (too hard for a bot that covers one column), not device-tested.
+
 ### Phase 11 - discrete columns, trapdoors, barricades, level warp
 - **Pivot:** the Phase 10 carved-lane terrain and open-field slide generator are replaced by a discrete column grid (1-4 vertical lanes, 8px dividers). L1-8: 1 narrow centre column (rest letterboxed/grayed); L9-16: 2; L17-24: 3; L25+: 4.
 - **Cannon:** drags across the active span; shots are clamped into the column the cannon aligns with. Gates are bound to a column; every column has an `x` gate.

@@ -62,6 +62,9 @@
     box-shadow: 0 6px 0 #124a9c, 0 10px 24px rgba(0,0,0,.5);
   }
   #overlay button:active { transform: translateY(4px); box-shadow: 0 2px 0 #124a9c; }
+  #warpRow { display: flex; align-items: center; gap: 8px; color: rgba(255,255,255,.75); font-size: 14px; }
+  #warpRow input { width: 72px; font: inherit; font-size: 18px; padding: 8px; border-radius: 10px; border: 1px solid rgba(255,255,255,.3); background: rgba(20,30,60,.85); color: #fff; text-align: center; }
+  #overlay #warp { font-size: 16px; padding: 9px 20px; box-shadow: 0 4px 0 #124a9c; }
   #mute {
     position: absolute; top: 8px; right: 10px; z-index: 5;
     width: 36px; height: 36px; padding: 0; border-radius: 50%;
@@ -90,8 +93,9 @@
     <div id="overlay">
       <h1 id="overlayTitle">Victory!</h1>
       <button id="restart" type="button">Next Level</button>
+      <div id="warpRow"><label for="lvlInput">Level</label><input id="lvlInput" type="number" inputmode="numeric" min="1" max="9999" value="1"><button id="warp" type="button">Warp</button></div>
     </div>
-    <span id="ver">v11 · c10</span>
+    <span id="ver">v12 · c11</span>
     <button id="pause" type="button" aria-label="Pause game" title="Pause">&#10074;&#10074;</button>
     <button id="mute" type="button" aria-label="Mute audio" title="Mute / unmute">&#128266;</button>
   </div>
@@ -167,6 +171,7 @@
   var POOL_RATE_CAP = 250;                // blue hits/s the 1500-mob pool can sustain (lifetime ~1.8s, with headroom)
   var TIER_SIZE = 5;
   var TERRAIN_EFF = 0.93;                 // throughput kept per terrain piece (measured)
+  var THREAT_K = 1.0, THREAT_MIN = 8, THREAT_MAX = 24, THREAT_DELAY = 10, THREAT_RATE = 14;   // threat budget: red wave size = THREAT_K x the blue barricade's hits
   var MAX_TERRAIN = 12, SLIDE_MIN = 70, RED_SLIDE = 90;   // min tangential slide speed so mobs never stall on a flat face
   var PIPE_RATE = 28;                     // reds/s leaving the pipe (spacing ~ 1 body at base speed)
   var CRATE_R = 16 * ES, CRATE_HP = 30, CRATE_SPEED = 16, CRATE_MIN = 15, CRATE_MAX = 20;   // supply crate
@@ -194,7 +199,7 @@
   var GATE_SLOTS = [354, 316, 278, 240];                       // gate rows inside a column, bottom to top (38px apart)
   // ---------- Phase 11: discrete columns (1-4), dividers with trapdoors ----------
   var COL_W = [0, 120, 150, 104, 80], DIV_W = 8, TD_H = 36, MAX_COLS = 4, MAX_TD = 3, LEAK_V = 170;
-  function columnCount(n) { return n <= 8 ? 1 : (n <= 16 ? 2 : (n <= 24 ? 3 : 4)); }   // tiers: L1-8 / 9-16 / 17-24 / 25+
+  function columnCount(n) { return n <= 2 ? 1 : (n <= 5 ? 2 : (n <= 9 ? 3 : 4)); }   // Phase 12: L1-2 / 3-5 / 6-9 / 10+
   function colSpan(nc, c) {                                     // [x0, x1] of column c when nc columns are active (centred)
     var cw = COL_W[nc], tot = nc * cw + (nc - 1) * DIV_W, ax0 = (W - tot) / 2, x0 = ax0 + c * (cw + DIV_W);
     return [x0, x0 + cw];
@@ -245,7 +250,7 @@
       baseHP: 0, mtm: 1, throughput: 0,
       isBoss: isBoss,
       bossHP: 0,
-      redInterval: Math.max(2.5, 7.0 * Math.pow(0.98, tf - 1)),
+      redInterval: Math.max(2.5, 5.0 * Math.pow(0.98, tf - 1)),
       waveMin: wMin, waveMax: Math.max(wMin, wMax),
       redSpeedMul: 1 + Math.min(0.25, (tf - 1) * 0.005),   // speed growth is capped; density and shields carry late game
       mixTank: tier >= 2 ? Math.min(0.45, 0.2 + 0.03 * (tier - 2)) : 0, mixSprinter: tier >= 4 ? Math.min(0.3, 0.2 + 0.02 * (tier - 4)) : 0,
@@ -259,9 +264,9 @@
     var nc = columnCount(n), cw = COL_W[nc], seqs = [], c, total = 0, defs = [], di = [];
     L.cols = nc;
     for (c = 0; c < nc; c++) {
-      var sq = ['L'];
-      if (n > 1 && rnd() < 0.7) { if (tier >= 3 && rnd() < 0.6) sq.push('N'); sq.push('H'); }
-      if (nc <= 2 && n > 1 && rnd() < 0.3) sq.unshift('L');
+      var sq = n <= 2 ? [] : ['L'];
+      if (n > 2 && rnd() < 0.7) { if (tier >= 3 && rnd() < 0.6) sq.push('N'); sq.push('H'); }
+      if (nc <= 2 && n > 2 && rnd() < 0.3) sq.unshift('L');
       seqs.push(sq); total += sq.length;
     }
     while (total > MAX_GATES) {                         // gate bits are limited: trim extras from the longest column
@@ -278,7 +283,7 @@
         else { d = rnd() < 0.5 ? ['-', 10, '-10'] : ['/', 2, '/2']; w = Math.round(cw * 0.78); defs.push([w, GATE_SLOTS[i], d[0], d[1], d[2], false, speed * 1.05, c]); }
         if (d[0] === 'x') hasX = true;
       }
-      if (!hasX) { var fx = defs[first], hi = fx[0] < 0.6 * cw; fx[2] = 'x'; fx[3] = hi ? 3 : 2; fx[4] = hi ? 'x3' : 'x2'; }   // every column has a multiplier
+      if (!hasX && seqs[c].length) { var fx = defs[first], hi = fx[0] < 0.6 * cw; fx[2] = 'x'; fx[3] = hi ? 3 : 2; fx[4] = hi ? 'x3' : 'x2'; }   // every column has a multiplier
       for (i = 0; i < seqs[c].length; i++) if (seqs[c][i] === 'N') defs[first + i][5] = !defs[first + i + 1][5];   // negative slides opposite the high it guards
     }
     L.gates = defs;
@@ -296,19 +301,28 @@
       for (i = 0; i < nc - 1; i++) if (i === 0 || rnd() < 0.8) L.trapdoors.push([i, Math.round(168 + perm[i] * 78 + rnd() * 18)]);
     }
     L.leakP = 0.25 + rnd() * 0.15;
-    var nbar = n < 3 ? 0 : Math.min(MAX_TERRAIN, 1 + (((n - 3) / 6) | 0)), bk;
+    // Phase 12: L1-2 spawn only gray blocks. Blue barricades (rewards) never share a column and each one carries a
+    // Threat Budget: a dense red wave in an ADJACENT column, sized by the barricade's hit value.
+    var nbar = n <= 2 ? n : Math.min(MAX_TERRAIN, 2 + (((n - 3) / 4) | 0)), bk, blueUsed = [false, false, false, false];
+    L.threats = [];
     for (bk = 0; bk < nbar; bk++) {
-      c = (rnd() * nc) | 0;
+      var rt = rnd(), typ = n <= 2 ? 0 : (rt < 0.25 ? 0 : (rt < 0.65 ? 1 : 2)), freeC = [];
+      if (typ === 1) { for (j = 0; j < nc; j++) if (!blueUsed[j]) freeC.push(j); if (nc < 2 || !freeC.length || isBoss) typ = 0; }   // boss levels: the boss is the threat, no reward blocks
+      c = typ === 1 ? freeC[(rnd() * freeC.length) | 0] : (rnd() * nc) | 0;
       var gTop = 1e9; for (j = 0; j < defs.length; j++) if (defs[j][7] === c && defs[j][1] < gTop) gTop = defs[j][1];
-      var yMin = FIELD_TOP + 24, yMax = gTop - GATE_H / 2 - 36;
+      var yMin = FIELD_TOP + 24, yMax = Math.min(360, gTop - GATE_H / 2 - 36);
       if (yMax < yMin) continue;
       var by = yMin + rnd() * (yMax - yMin), clash = false;
       for (j = 0; j < L.terrain.length; j++) if (L.barrCol[j] === c && Math.abs(L.terrain[j][1] - by) < 46) clash = true;
       if (clash) continue;
-      var bw = Math.round(cw * (0.55 + rnd() * 0.15)), left = rnd() < 0.5, bx0 = colSpan(nc, c)[0];
-      var typ = rnd() < 0.34 ? 0 : (rnd() < 0.5 ? 1 : 2), hits = Math.min(60, Math.round(10 + n * 0.5));
+      var bw = Math.round(cw * (0.55 + rnd() * 0.15)), left = rnd() < 0.5, bx0 = colSpan(nc, c)[0], hits = Math.min(60, Math.round(10 + n * 0.5));
       L.terrain.push([left ? bx0 + bw / 2 : bx0 + cw - bw / 2, by, bw / 2, 10, 0, left ? 1 : -1, typ, hits]);
       L.barrCol.push(c);
+      if (typ === 1) {
+        blueUsed[c] = true;
+        var adj = c === 0 ? 1 : (c === nc - 1 ? nc - 2 : (rnd() < 0.5 ? c - 1 : c + 1));
+        L.threats.push([adj, Math.max(THREAT_MIN, Math.min(THREAT_MAX, Math.round(hits * THREAT_K))), c, hits]);
+      }
     }
 
     // --- static obstacles (placed away from gate rows, terrain lanes and each other) ---
@@ -562,6 +576,7 @@
   var cannonHP = CANNON_MAX_HP;
   var mixTank = 0, mixSprinter = 0;
   var waveQueue = 0, wq = new Int16Array(MAX_COLS), pa = new Float32Array(MAX_COLS), waveCursor = 0;   // reds leave a pipe at the top of a column (or the boss) as a stream
+  var tq = new Int16Array(MAX_COLS), ta = new Float32Array(MAX_COLS), threatsOn = true, threatClock = 0;   // threat-budget waves queued per column
   var crateActive = false, crateX = 0, crateY = 0, crateHP = 0, crateTimer = 17;
   var pillX = new Float32Array(PILL_MAX), pillY = new Float32Array(PILL_MAX), pillT = new Uint8Array(PILL_MAX), pillCount = 0;
   var powerLeft = 0, powerName = '';
@@ -584,6 +599,7 @@
   var muteBtn = document.getElementById('mute');
   var pauseBtn = document.getElementById('pause');
   var paused = false;
+  var lvlInput = document.getElementById('lvlInput'), warpBtn = document.getElementById('warp');
   var scale = 1;
 
   function syncMuteBtn() {
@@ -668,8 +684,11 @@
     bossWave = Math.max(3, Math.min(12, Math.round(L.waveMin * 0.35 * BOSS_WAVE_K))); bossInterval = Math.max(8, 12 - L.tier * 0.2) * BOSS_INT_K;   // smaller waves, slower cadence than any level
     state = PLAYING;
     fireAcc = 0; fireCount = 0;
-    redTimer = 3 + 2.5 * (colN - 1);                     // grace period before the first wave / the boss
+    redTimer = 2;                                        // short grace period before the first wave / the boss
     waveQueue = 0; waveCursor = 0; for (var wc = 0; wc < MAX_COLS; wc++) { wq[wc] = 0; pa[wc] = 0; }
+    threatClock = 0;
+    for (var tc2 = 0; tc2 < MAX_COLS; tc2++) { tq[tc2] = 0; ta[tc2] = 0; }
+    if (threatsOn) for (var th = 0; th < L.threats.length; th++) if (L.threats[th][0] < colN) tq[L.threats[th][0]] += L.threats[th][1];
     leakP = L.leakP; tdCount = L.trapdoors.length;
     for (var td = 0; td < tdCount; td++) { tdDiv[td] = L.trapdoors[td][0]; tdY[td] = L.trapdoors[td][1]; }
     crateActive = false; crateTimer = CRATE_MIN + Math.random() * (CRATE_MAX - CRATE_MIN); pillCount = 0;
@@ -688,6 +707,7 @@
     overlayTitle.textContent = won ? 'Victory!' : 'Defeat';
     restartBtn.textContent = won ? (level < MAX_LEVEL ? 'Next Level' : 'Victory - Play Again') : 'Try Again';
     overlay.classList.toggle('lose', !won);
+    lvlInput.value = level;
     overlay.classList.add('show');
     if (won) sfxWin(); else sfxLose();
   }
@@ -699,7 +719,7 @@
     if (p) {
       if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(rafId);
       overlayTitle.textContent = 'PAUSED'; restartBtn.textContent = 'Resume';
-      overlay.classList.remove('lose'); overlay.classList.add('show');
+      overlay.classList.remove('lose'); lvlInput.value = level; overlay.classList.add('show');
     } else {
       overlay.classList.remove('show');
       last = performance.now(); rafId = requestAnimationFrame(frame);
@@ -715,6 +735,18 @@
     if (state === WON) level = level >= MAX_LEVEL ? 1 : level + 1;
     reset();
   }
+  // Developer level warp (works from the Pause / Victory / Defeat screens; no URL parameter needed)
+  function warpTo(n) {
+    n = parseInt(n, 10);
+    if (!(n >= 1)) return false;
+    level = n > 9999 ? 9999 : n;
+    if (paused) { paused = false; last = performance.now(); rafId = requestAnimationFrame(frame); }
+    reset();
+    return true;
+  }
+  warpBtn.addEventListener('click', function () { initAudio(); if (!warpTo(lvlInput.value)) lvlInput.value = level; });
+  ['pointerdown', 'touchmove', 'keydown'].forEach(function (ev) { lvlInput.addEventListener(ev, function (e) { e.stopPropagation(); }); });
+  warpBtn.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
   restartBtn.addEventListener('click', onRestart);
   restartBtn.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
 
@@ -752,6 +784,19 @@
     var rr = Math.random(), px = cx + (Math.random() * 2 - 1) * half;
     px = px < colX0[c] + RED_R ? colX0[c] + RED_R : (px > colX1[c] - RED_R ? colX1[c] - RED_R : px);
     return spawnRed(px, (isBossLevel && bossActive ? bossY + BOSS_H / 2 - 6 : BASE_BOTTOM) + RED_R + 1, rr < mixSprinter ? 2 : (rr < mixSprinter + mixTank ? 1 : 0));
+  }
+  function threatStream(dt) {
+    if (!isBossLevel || bossActive) threatClock += dt;       // the budget starts bleeding in THREAT_DELAY s after play (boss: after it appears)
+    if (threatClock < THREAT_DELAY) return;                    // threat-budget reds leave the top edge of their (adjacent) column
+    for (var c = 0; c < colN; c++) {
+      if (tq[c] <= 0) { ta[c] = 0; continue; }
+      ta[c] += dt * THREAT_RATE;
+      while (ta[c] >= 1 && tq[c] > 0) {
+        var half = (colX1[c] - colX0[c]) / 2 - RED_R - 1;
+        if (!emitRed(c, (colX0[c] + colX1[c]) / 2, half < 24 ? half : 24)) { ta[c] = 0; break; }
+        ta[c] -= 1; tq[c]--;
+      }
+    }
   }
   function pipeStream(dt) {
     var c;
@@ -874,8 +919,8 @@
     }
 
     if (spawnerOn) {
-      pipeStream(dt);
-      if (!crateActive) { crateTimer -= dt; if (crateTimer <= 0) spawnCrate(); }
+      pipeStream(dt); threatStream(dt);
+      if (!crateActive && level > 2) { crateTimer -= dt; if (crateTimer <= 0) spawnCrate(); }
     }
     if (powerLeft > 0) { powerLeft -= dt; if (powerLeft <= 0) { powerLeft = 0; powerName = ''; setWeapon(Armory[baseWeaponName]); } }
 
@@ -1337,14 +1382,6 @@
       }
     }
 
-    // Red pipes at the top of every active column (boss levels: the hull is the source)
-    if (!isBossLevel) {
-      for (i = 0; i < colN; i++) {
-        var pcx = (colX0[i] + colX1[i]) / 2;
-        ctx.fillStyle = '#3a1020'; ctx.fillRect(pcx - 10, BASE_BOTTOM - 4, 20, 10);
-        ctx.fillStyle = wq[i] > 0 ? '#ffd0d6' : '#ff4d5e'; ctx.fillRect(pcx - 6, BASE_BOTTOM + 3, 12, 3);
-      }
-    }
     // Barricades: hit counters; blue shatters into blues (up), red into reds (down), gray just absorbs
     ctx.font = '800 12px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     for (i = 0; i < terrainCount; i++) {
@@ -1473,7 +1510,7 @@
     window.__mob = {
       update: update, reset: reset, gates: GATES, restart: onRestart, generateLevel: generateLevel,
       MAX_WAVE: MAX_WAVE,
-      setLevel: function (n) { level = n; reset(); },
+      setLevel: function (n) { level = n; reset(); }, warp: warpTo,
       setGates: function (defs) { gateCount = defs.length; for (var q = 0; q < defs.length; q++) cfgGate(GATES[q], defs[q]); },
       setObstacles: function (o) {
         setTerrain(o.terrain || []);
@@ -1488,7 +1525,7 @@
                  isBoss: isBossLevel, bossActive: bossActive, bossHP: bossHP, bossMaxHP: bossMaxHP, bossY: bossY, bossX: bossX,
                  capBlue: MAX_MOBS, capRed: MAX_RED,
                  redX: sl.call(rx, 0, redCount), redY: sl.call(ry, 0, redCount), redHP: sl.call(rhp, 0, redCount), redType: sl.call(rtype, 0, redCount),
-                 waveQueue: waveQueue, crateTimer: crateTimer, terrainCount: terrainCount,
+                 waveQueue: waveQueue, threatQueue: tq[0] + tq[1] + tq[2] + tq[3], tq: Array.prototype.slice.call(tq), crateTimer: crateTimer, terrainCount: terrainCount,
                  cols: colN, colX0: Array.prototype.slice.call(colX0, 0, colN), colX1: Array.prototype.slice.call(colX1, 0, colN), AX0: AX0, AX1: AX1,
                  tdCount: tdCount, tdY: Array.prototype.slice.call(tdY, 0, tdCount), tdDiv: Array.prototype.slice.call(tdDiv, 0, tdCount),
                  barr: (function () { var o = []; for (var q = 0; q < terrainCount; q++) o.push({ x: tCX[q], y: tCY[q], hw: tHW[q], hh: tHH[q], type: tType[q], hits: tHits[q] }); return o; })(), crateActive: crateActive, crateX: crateX, crateY: crateY, crateHP: crateHP,
@@ -1532,7 +1569,7 @@
       setBossSpeed: function (pxPerSec) { bossSpeed = pxPerSec; },
       spawnBlue: function (x, y, vx, vy, mask) { return spawnMob(x, y, vx, vy, mask || 0); },
       spawnRed: spawnRed,
-      setFlags: function (f) { if ('fire' in f) autoFire = f.fire; if ('spawner' in f) spawnerOn = f.spawner; }
+      setFlags: function (f) { if ('fire' in f) autoFire = f.fire; if ('spawner' in f) spawnerOn = f.spawner; if ('threats' in f) threatsOn = f.threats; }
     };
   }
 
@@ -1544,6 +1581,10 @@
   syncMuteBtn();
   resize();
   reset();
+  if (!(typeof location !== 'undefined' && location.hash === '#debug')) {   // Main Menu: Start button + level warp (the game waits, paused, until Start)
+    paused = true; overlayTitle.textContent = 'MOB SWARM'; restartBtn.textContent = 'Start';
+    overlay.classList.remove('lose'); lvlInput.value = level; overlay.classList.add('show'); render();
+  }
   requestAnimationFrame(function (t) { last = t; requestAnimationFrame(frame); });
 })();
 </script>

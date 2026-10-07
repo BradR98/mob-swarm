@@ -78,3 +78,12 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done. Suggested model: **Sonnet** =
 | P11-4 | Trapdoor leaks | [x] | Pro |
 | P11-5 | Gray/blue/red barricades | [x] | Pro |
 | P11-6 | Real-device playtest of columns, leaks, FPS | [ ] | - |
+
+## Phase 12: Pacing and Threat Budget
+
+| ID | Task | Status | Model |
+|----|------|--------|-------|
+| P12-1 | In-game level selector + main menu | [x] | Sonnet |
+| P12-2 | 1/2/3/4 columns at L1/3/6/10 | [x] | Sonnet |
+| P12-3 | Threat budget + anti-stacking | [x] | Pro |
+| P12-4 | Rebalance L6-L20 for multi-lane play (bot L16 0/3) | [ ] | Pro |

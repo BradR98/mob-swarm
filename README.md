@@ -55,4 +55,4 @@ TBD.
 
 ## Dev level warp
 
-Open `index.html?level=20` to start directly at level 20 (3 columns). Columns: L1-8 one, L9-16 two, L17-24 three, L25+ four.
+Use the Level box + Warp button on the menu/pause/end screens to jump to any level (`?level=N` also works outside the PWA). Columns: L1-2 one, L3-5 two, L6-9 three, L10+ four.

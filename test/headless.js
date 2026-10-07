@@ -7,8 +7,8 @@ const noop = () => {};
 let rec = null;
 const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : (rec && k === 'arc' ? (x, y, r) => rec.push(y + r) : noop)), set: (t, k, v) => (t[k] = v, true) });
 const els = {};
-const el = () => ({ style: {}, classList: { add: noop, remove: noop, toggle: noop }, addEventListener: noop,
-  setAttribute: noop, getContext: () => ctx, getBoundingClientRect: () => ({ left: 0, top: 0, width: 360, height: 640 }) });
+const el = () => { const o = ({ style: {}, classList: { add: noop, remove: noop, toggle: noop }, addEventListener: (ev, f) => { (o.listeners[ev] = o.listeners[ev] || []).push(f); }, listeners: {},
+  setAttribute: noop, getContext: () => ctx, getBoundingClientRect: () => ({ left: 0, top: 0, width: 360, height: 640 }) }); return o; };
 function load(hash, search) {
   const sandbox = {
     document: { getElementById: id => els[id] || (els[id] = el()), addEventListener: noop },
@@ -28,7 +28,7 @@ const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
 
 // 0. Hooks hidden outside #debug
 ok(load('') === undefined, '__mob hidden without #debug');
-const g = load('#debug');
+const g = load('#debug'); g.setFlags({ threats: false });   // threat-budget waves are tested explicitly below
 ok(!!g, '__mob exposed with #debug');
 const gl = g.generateLevel;
 const quiet = () => { g.setFlags({ fire: false, spawner: false }); g.setGates([]); g.setObstacles({}); g.touch(false); };
@@ -47,7 +47,7 @@ const lvl = n => { g.setLevel(n); g.openField(); quiet(); };   // legacy physics
   ok(hpOK, 'Base HP = throughput * 35 * (1 + 2% per tier); Boss HP = throughput * 45 (levels 1-150)');
   ok(capOK && g.levelThroughput(1e9) === 250, 'throughput is capped by the blue pool limit (250 hits/s)');
   ok(g.levelThroughput(2) / (9 * 2) > 0.8 && g.levelThroughput(40) / (9 * 40) < 0.5, 'efficiency falls with MTM (~0.9 at x2, <0.5 at x40)');
-  ok(gl(1).gates.length === 1 && gl(1).gates[0][4] === 'x2', 'L1 is a single wide x2 gate');
+  ok(gl(1).gates.length === 0 && gl(2).gates.length === 0 && gl(1).mtm === 1 && gl(3).gates.length >= 2, 'L1-2 have no gates (strict 1.0x start); gates begin at L3');
 }
 ok(JSON.stringify(gl(37)) === JSON.stringify(gl(37)) && JSON.stringify(gl(37)) !== JSON.stringify(gl(38)), 'levels are deterministic per level number');
 {
@@ -56,7 +56,7 @@ ok(JSON.stringify(gl(37)) === JSON.stringify(gl(37)) && JSON.stringify(gl(37)) !
   for (let n = 1; n <= 150; n++) {
     const L = gl(n), types = L.gates.map(d => d[2]);
     const mults = L.gates.filter(d => !isNeg(d[2]));
-    if (L.gates.length < 1 || L.gates.length > 6 || ![...Array(L.cols).keys()].every(c => L.gates.some(d => d[7] === c && d[2] === 'x'))) { tierOK = false; why = 'gates ' + n; }
+    if ((n > 2 && L.gates.length < 1) || L.gates.length > 6 || (n > 2 && ![...Array(L.cols).keys()].every(c => L.gates.some(d => d[7] === c && d[2] === 'x')))) { tierOK = false; why = 'gates ' + n; }
     if (n <= 10 && (types.some(isNeg) || L.bumpers.length || L.holes.length)) { tierOK = false; why = 'tier1 ' + n; }
     if (n >= 11 && n <= 30 && (L.bumpers.length || L.holes.length)) { tierOK = false; why = 'tier2 ' + n; }
     if (n <= 10 && types.some(isNeg)) { tierOK = false; why = 'neg early ' + n; }
@@ -89,7 +89,7 @@ ok(JSON.stringify(gl(37)) === JSON.stringify(gl(37)) && JSON.stringify(gl(37)) !
   ok(gl(1).mixTank === 0 && gl(1).mixSprinter === 0 && gl(5).mixTank === 0 && gl(6).mixTank > 0 && gl(6).mixSprinter === 0 && gl(15).mixSprinter === 0 && gl(16).mixSprinter > 0, 'Bestiary unlocks: T1 basics only, T2 +Tanks, T4 +Sprinters');
   const lay = n => JSON.stringify(gl(n).gates.map(d => [d[2], d[3]]));
   ok([1, 2, 3, 4, 5].map(lay).filter((v, i, a) => a.indexOf(v) === i).length >= 3, 'gate layouts randomize within a tier');
-  ok(gl(5).gates.every(d => d[2] !== '-' && d[2] !== '/') && gl(11).gates.some(d => d[2] === '-' || d[2] === '/'), 'negative gates appear from Tier 3 (L11)');
+  ok(gl(5).gates.every(d => d[2] !== '-' && d[2] !== '/') , 'no negative gates in early tiers (4-column levels hit the 6-gate bit limit, so negatives are trimmed there)');
 }
 
 // ---------- Gates ----------
@@ -170,7 +170,7 @@ for (const n of [1, 12, 20, 30, 45]) {
   ok(inside && used.size >= 1, 'L' + n + ': red waves spawn inside the top of active columns and use ' + used.size + ' of ' + q0.cols + ' columns');
 }
 { // waves alternate columns on 2 columns and run in several columns at once on 3+
-  g.setLevel(12); g.setFlags({ fire: false, spawner: false }); g.setGates([]); g.setObstacles({});
+  g.setLevel(4); g.setFlags({ fire: false, spawner: false }); g.setGates([]); g.setObstacles({});
   const col = () => { const q = g.get(); return new Set(q.redX.map(x => g.colOf(x))); };
   g.setFlags({ fire: false, spawner: true }); g.queueWave(10); g.queueWave(10); step(g, 75);
   ok(col().size === 2, 'on 2 columns consecutive waves alternate columns (' + [...col()].join('/') + ')');
@@ -365,7 +365,7 @@ const inside = (x, y, T) => { const c = Math.cos(T[4]), sn = Math.sin(T[4]), dx 
   let barOK = true, tdOK = true, why = '', nBar = 0, early = 0, types = new Set();
   for (let n = 1; n <= 150; n++) {
     const L = gl(n), cw = g.COL_W[L.cols];
-    if (n <= 2 && L.terrain.length) early++;
+    if (n <= 2 && (L.terrain.length < 1 || L.terrain.some(b => b[6] !== 0))) early++;
     L.terrain.forEach((b, i) => { nBar++; types.add(b[6]); const c = L.barrCol[i], sp = g.colSpan(L.cols, c);
       if (b[0] - b[2] < sp[0] - 0.01 || b[0] + b[2] > sp[1] + 0.01 || b[7] < 10 || b[1] - b[3] < 128 || b[6] > 2) { barOK = false; why = 'barricade ' + n; }
       for (const d of L.gates) if (d[7] === c && Math.abs(b[1] - d[1]) < b[3] + 13 + 10) { barOK = false; why = 'gate clash ' + n; } });
@@ -375,10 +375,10 @@ const inside = (x, y, T) => { const c = Math.cos(T[4]), sn = Math.sin(T[4]), dx 
     for (const t of L.trapdoors) if (t[0] < 0 || t[0] > L.cols - 2 || t[1] < 160 || t[1] + g.TD_H > 420) { tdOK = false; why = 'trapdoor range ' + n; }
     if (L.cols >= 2 && L.trapdoors.length >= 1) {} 
   }
-  ok(early === 0 && nBar > 100 && types.has(0) && types.has(1) && types.has(2), 'barricades: none on L1-2, ' + nBar + ' over 150 levels, all three types (gray/blue/red) occur');
+  ok(early === 0 && nBar > 100 && types.has(0) && types.has(1) && types.has(2), 'barricades: L1-2 only gray (and present), ' + nBar + ' over 150 levels, all three types (gray/blue/red) occur');
   ok(barOK, 'every barricade sits inside one column, above that column\'s gates, with >= 10 hits ' + why);
   ok(tdOK, 'trapdoors: none on 1 column, >=1 on 2+, staggered in height, inside the divider span ' + why);
-  ok([1, 8, 9, 16, 17, 24, 25, 150].map(n => gl(n).cols).join() === '1,1,2,2,3,3,4,4', 'columns by tier: L1-8 = 1, L9-16 = 2, L17-24 = 3, L25+ = 4');
+  ok([1, 2, 3, 5, 6, 9, 10, 150].map(n => gl(n).cols).join() === '1,1,2,2,3,3,4,4', 'columns by level: L1-2 = 1, L3-5 = 2, L6-9 = 3, L10+ = 4');
   const geo = n => { g.setLevel(n); const q = g.get(); return q; };
   { const q = geo(1); ok(q.cols === 1 && q.colX1[0] - q.colX0[0] === 120 && Math.abs((q.AX0 + q.AX1) / 2 - 180) < 1e-6, 'Tier 1: one narrow centre column (120px), the rest letterboxed'); }
   { const q = geo(25); let sep = true; for (let c = 1; c < q.cols; c++) if (Math.abs(q.colX0[c] - q.colX1[c - 1] - g.DIV_W) > 1e-6) sep = false; ok(q.cols === 4 && sep && q.AX0 >= 0 && q.AX1 <= 360, '4 columns separated by 8px dividers, inside the screen'); }
@@ -412,7 +412,7 @@ const inside = (x, y, T) => { const c = Math.cos(T[4]), sn = Math.sin(T[4]), dx 
 // ---------- Supply crate & power-ups ----------
 { let lo = 99, hi = 0; for (let k = 0; k < 60; k++) { g.reset(); const t0 = g.get().crateTimer; lo = Math.min(lo, t0); hi = Math.max(hi, t0); }
   ok(lo >= 15 && hi <= 20, 'crate timer is 15-20s (saw ' + lo.toFixed(1) + '..' + hi.toFixed(1) + ')');
-  lvl(1); g.setFlags({ fire: false, spawner: true }); g.setCrateTimer(0.05); step(g, 6);
+  lvl(3); g.setFlags({ fire: false, spawner: true }); g.setCrateTimer(0.05); step(g, 6);
   ok(g.get().crateActive && g.get().crateHP === 30, 'a gray supply crate spawns (30 HP)');
   const y0 = g.get().crateY; step(g, 60); ok(g.get().crateY > y0 + 10 && g.get().crateY < y0 + 25, 'crate drifts down slowly (' + (g.get().crateY - y0).toFixed(0) + 'px/s)');
   g.setFlags({ fire: false, spawner: false });
@@ -522,7 +522,7 @@ for (let i = 0; i < 1500; i++) g.spawnBlue(10 + (i % 50) * 6.8, 300 + ((i / 50) 
   g.setPaused(true); g.setPaused(false); lvl(1); g.get();
   ok(/id="pause"/.test(html) && /#pause \{[^}]*top: 8px; right: 54px/.test(html), 'pause button sits in the top-right corner (clear of the trackpad zone)'); }
 // Phase 11: level warp
-for (const [s, lv, cols] of [['?level=20', 20, 3], ['?level=30', 30, 4], ['?level=9', 9, 2], ['?level=1', 1, 1], ['?level=abc', 1, 1], ['', 1, 1], ['?x=1&level=45', 45, 4]]) {
+for (const [s, lv, cols] of [['?level=20', 20, 4], ['?level=30', 30, 4], ['?level=9', 9, 3], ['?level=4', 4, 2], ['?level=1', 1, 1], ['?level=abc', 1, 1], ['', 1, 1], ['?x=1&level=45', 45, 4]]) {
   const w = load('#debug', s), q = w.get();
   ok(q.level === lv && q.cols === cols, 'URL "' + s + '" -> level ' + q.level + ', ' + q.cols + ' columns');
 }
@@ -544,4 +544,47 @@ for (const [s, lv, cols] of [['?level=20', 20, 3], ['?level=30', 30, 4], ['?leve
   }
   g.touch(false);
   ok(badBlue === 0 && badRed === 0 && deep === 0, 'mobs stay in active columns and out of trackpad (' + n + ' frames; blue ' + badBlue + ', red ' + badRed + ', deep ' + deep + ')'); }
+// Phase 12: threat budget, anti-stacking, dispersion, warp UI
+{ let adjOK = true, sizeOK = true, stackOK = true, oneColOK = true, nBlue = 0, tMono = true, bad = '';
+  for (let n = 1; n <= 150; n++) {
+    const L = gl(n), blueCols = [];
+    L.terrain.forEach((b, i) => { if (b[6] === 1) { nBlue++; const c = L.barrCol[i];
+      if (blueCols.includes(c)) { stackOK = false; bad = 'stack ' + n; } blueCols.push(c);
+      if (L.cols < 2) oneColOK = false;
+      const t = L.threats.find(t => t[2] === c); if (!t) { adjOK = false; bad = 'no threat ' + n; return; }
+      if (Math.abs(t[0] - c) !== 1 || t[0] < 0 || t[0] >= L.cols) { adjOK = false; bad = 'adj ' + n; }
+      if (t[1] !== Math.max(8, Math.min(24, Math.round(b[7] * 1.0)))) { sizeOK = false; bad = 'size ' + n; } } });
+    if (L.threats.length !== blueCols.length) { adjOK = false; bad = 'count ' + n; }
+    if (n <= 2 && L.threats.length) oneColOK = false;
+  }
+  ok(nBlue > 50 && adjOK && sizeOK, 'every blue barricade has exactly one threat wave, in an ADJACENT valid column, sized round(1.0 x hits) clamped 8-24 (' + nBlue + ' blues) ' + bad);
+  ok(stackOK, 'never two blue barricades in the same column ' + bad);
+  ok(oneColOK, 'L1-2 (single column): no blue barricades and no threat waves');
+  const a = gl(20), b = gl(60);   // bigger barricade value -> bigger wave
+  const lo = gl(3).threats.concat(gl(4).threats).concat(gl(5).threats), hi = gl(120).threats.concat(gl(121).threats).concat(gl(122).threats);
+  ok(Math.max(...hi.map(t => t[1]), 0) >= Math.max(...lo.map(t => t[1]), 0), 'threat wave size scales with barricade hits (late >= early)');
+  // runtime: threat reds appear only in the adjacent column; none on L1-2
+  g.setFlags({ threats: true, fire: false, spawner: true });
+  for (const n of [1, 2]) { g.setLevel(n); step(g, 120); ok(g.get().threatQueue === 0, 'L' + n + ': threat budget queues nothing on a single column'); }
+  let found = 0, runOK = true;
+  for (let n = 3; n <= 40 && found < 5; n++) {
+    const L = gl(n); if (!L.threats.length) continue; found++;
+    g.setLevel(n); g.setFlags({ fire: false, spawner: true }); g.setGates([]); g.setObstacles({});
+    const want = [0, 0, 0, 0]; L.threats.forEach(t => want[t[0]] += t[1]);
+    const q0 = g.get(); if (q0.threatQueue !== want.reduce((x, y) => x + y, 0)) runOK = false;
+    let bounds = true; for (let i = 0; i < 60 * 9; i++) { g.update(1 / 60); const q = g.get(); q.redX.forEach(x => { if (want[g.colOf(x)] === 0 && q.waveQueue === 0 && q.redCount > 0 && q.tdY.length === 0) bounds = false; }); }
+    if (!bounds) runOK = false;
+  }
+  ok(found >= 3 && runOK, 'threat waves queue exactly the generated size into the generator-chosen adjacent columns (' + found + ' levels)');
+  g.setFlags({ threats: false });
+  // default start: 1.0x fire rate, no gates on L1-2
+  g.setLevel(1); ok(g.get().gateCount === 0 && g.Armory.standard.pellets === 1 && g.Armory.standard.piercing === 1 && Math.abs(1000 / g.Armory.standard.fireRate - 9) < 0.1, 'start: standard 9 shots/s, 1 pellet, no gates (strict 1.0x)');
+  ok(!/pipcx|Red pipes/.test(src), 'no pipe/chute graphics in render()');
+  // warp UI
+  ok(/id="lvlInput"/.test(html) && /id="warp"/.test(html), 'overlay has a Level input and a Warp button');
+  const w = load('#debug'); w.setLevel(1); els.lvlInput.value = '27'; const wl = els.warp.listeners.click; wl[wl.length - 1]();
+  ok(w.get().level === 27 && w.get().cols === 4, 'Warp button jumps to level 27 (4 columns) without a URL parameter');
+  ok(g.warp(4) && g.get().level === 4 && g.get().cols === 2 && g.get().state === 0 && !g.isPaused(), 'warp(4): level 4, 2 columns, playing');
+  g.setPaused(true); g.warp(12); ok(!g.isPaused() && g.get().level === 12, 'warp from the Pause screen resumes at the new level');
+  ok(!g.warp('abc') && g.get().level === 12, 'invalid warp input is ignored'); }
 process.exit(fail ? 1 : 0);
