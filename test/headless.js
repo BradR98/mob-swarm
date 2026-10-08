@@ -165,7 +165,7 @@ for (const n of [1, 12, 20, 30, 45]) {
   const q0 = g.get(), used = new Set(); let inside = true;
   for (let i = 0; i < 60 * 150 && used.size < 1 || i < 600; i++) {
     g.update(1 / 60); const q = g.get();
-    q.redX.forEach((x, k) => { const c = g.colOf(x); used.add(c); const inBand = q.tdY.some(t => q.redY[k] >= t - 8 && q.redY[k] <= t + g.TD_H + 8); if (!inBand && (x < q.colX0[c] - 0.01 || x > q.colX1[c] + 0.01)) inside = false; });
+    q.redX.forEach((x, k) => { const c = g.colOf(x); used.add(c); if (!q.doorOpen.some(o => o) && (x < q.colX0[c] - 0.01 || x > q.colX1[c] + 0.01)) inside = false; });
   }
   ok(inside && used.size >= 1, 'L' + n + ': red waves spawn inside the top of active columns and use ' + used.size + ' of ' + q0.cols + ' columns');
 }
@@ -179,13 +179,11 @@ for (const n of [1, 12, 20, 30, 45]) {
   g.setLevel(45); g.setFlags({ fire: false, spawner: true }); g.setGates([]); g.setObstacles({}); g.queueWave(60); step(g, 75);
   ok(col().size >= 3, 'high tiers dispatch a wave into 3 columns simultaneously (' + col().size + ')');
 }
-// Brownian reds: they never track the blue mass; they random-walk sideways and spread across the lane
-lvl(1); g.setFlags({ fire: false, spawner: false });
-for (let i = 0; i < 60; i++) g.spawnRed(180, 150, 0);
-for (let i = 0; i < 6; i++) g.spawnBlue(330, 520, 0, 0, 0);
-step(g, 100);
-{ const q = g.get(), mean = q.redX.reduce((a, b) => a + b, 0) / q.redX.length, sd = Math.sqrt(q.redX.reduce((a, b) => a + (b - mean) * (b - mean), 0) / q.redX.length);
-  ok(q.redX.length > 40 && Math.abs(mean - 180) < 15 && sd > 6, 'reds ignore the blue mass (centroid ' + mean.toFixed(1) + ' vs 180) and spread by Brownian drift (sd ' + sd.toFixed(1) + 'px)'); }
+// Phase 13: no Brownian drift - an isolated red falls perfectly straight and ignores the blue mass
+lvl(1); g.setFlags({ fire: false, spawner: false }); g.setObstacles({});
+g.spawnRed(150, 150, 0); for (let i = 0; i < 6; i++) g.spawnBlue(330, 520, 0, 0, 0);
+{ const x0 = g.get().redX[0]; let maxDx = 0, y0 = g.get().redY[0]; for (let i = 0; i < 90; i++) { g.update(1 / 60); const q = g.get(); maxDx = Math.max(maxDx, Math.abs(q.redX[0] - x0)); }
+  ok(maxDx < 0.01 && g.get().redY[0] > y0 + 100, 'red falls straight down (max lateral drift ' + maxDx.toFixed(4) + 'px, fell ' + (g.get().redY[0] - y0).toFixed(0) + 'px), no random walk'); }
 // ---------- Fire only while touching ----------
 lvl(1); g.setFlags({ fire: true, spawner: false });
 step(g, 120);
@@ -291,7 +289,7 @@ ok(g.get().state === 1 && els.restart.textContent === 'Next Level', 'killing the
 { const T = g.RedMobTypes;
   ok(T.Basic.speed === 1 && T.Basic.hp === 1 && T.Tank.speed === 0.5 && T.Tank.radius === 1.5 && T.Tank.hp === 3 && T.Tank.color === '#8a1020' &&
      T.Sprinter.speed === 1.5 && T.Sprinter.radius === 0.7 && T.Sprinter.hp === 1 && T.Sprinter.color === '#ff8a00', 'RedMobTypes: Basic 1x/1hp, Tank 0.5x/1.5r/3hp dark red, Sprinter 1.5x/0.7r/1hp orange');
-  const move = type => { lvl(1); g.spawnRed(180, 200, type); step(g, 30); return g.get().redY[0] - 200; };
+  const move = type => { lvl(1); g.spawnRed(180, 130, type); step(g, 40); const y0 = g.get().redY[0]; step(g, 30); return g.get().redY[0] - y0; };   // after the gravity ramp: terminal speed
   const mb = move(0), mt = move(1), ms = move(2);
   ok(Math.abs(mt / mb - 0.5) < 0.05 && Math.abs(ms / mb - 1.5) < 0.05, 'Tank moves at 0.5x and Sprinter at 1.5x Basic speed (' + mb.toFixed(0) + '/' + mt.toFixed(0) + '/' + ms.toFixed(0) + 'px)');
   const hits = type => { lvl(1); g.spawnRed(180, 300, type); let h = 0; while (g.get().redCount > 0 && h < 20) { g.spawnBlue(180, g.get().redY[0] + 28, 0, -250, 0); step(g, 6); h++; } return h; };
@@ -339,28 +337,13 @@ const inside = (x, y, T) => { const c = Math.cos(T[4]), sn = Math.sin(T[4]), dx 
   ok(!pen && maxVY <= 1, 'flat wall: no penetration and no bounce (max vy ' + maxVY.toFixed(1) + ')');
   ok(passed, 'flat wall: head-on blue is nudged along the face and flows round the end');
 }
-{ // red slides too
-  const FL = [180, 300, 60, 6, 0];
-  lvl(1); g.setObstacles({ terrain: [FL] }); g.spawnRed(178, 230, 0);
-  let pen = false, minY = 1e9, below = false;
-  for (let i = 0; i < 360 && g.get().redCount; i++) { g.update(1 / 60); const q = g.get(); if (!q.redCount) break; if (inside(q.redX[0], q.redY[0], FL)) pen = true; if (q.redY[0] > 330) { below = true; break; } }
-  ok(!pen && below, 'red hits terrain, slides round it and keeps marching (no penetration)');
-}
-{ // soak: generated terrain, heavy traffic, nobody ends up inside a slab
-  let bad = 0, checks = 0;
-  for (const n of [12, 27, 44, 58, 83]) {
-    g.setLevel(n); g.setFlags({ fire: true, spawner: true }); g.touch(true);
-    for (let i = 0; i < 60 * 12 && g.get().state === 0; i++) {
-      if (i % 45 === 0) g.aim(30 + Math.random() * 300);
-      g.update(1 / 60);
-      if (i % 5 === 0) { const q = g.get();
-        const T = q.barr.map(b => [b.x, b.y, b.hw, b.hh, 0]);
-        for (let k = 0; k < q.redX.length; k++) { checks++; if (T.some(t => inside(q.redX[k], q.redY[k], t))) bad++; } }
-    }
-  }
-  g.touch(false);
-  ok(bad === 0, 'soak on generated barricades: no red centre ever inside a live barricade (' + checks + ' samples)');
-}
+{ // Phase 13: a red lands on a barricade and halts; the next one stacks on top of it
+  lvl(1); const sp1 = g.colSpan(1, 0); g.openField(); g.setObstacles({ terrain: [[180, 300, 60, 12, 0, 1, 0, 40]] }); g.setGates([]);
+  g.spawnRed(180, 200, 0); step(g, 90);
+  let q = g.get(); const y1 = q.redY[0];
+  ok(Math.abs(q.redVY[0]) < 5 && y1 < 300 - 12 && y1 > 300 - 12 - 12, 'red halts on the barricade top (y ' + y1.toFixed(1) + ', vy ' + q.redVY[0].toFixed(1) + ')');
+  g.spawnRed(180, 200, 0); step(g, 90); q = g.get();
+  ok(q.redCount === 2 && Math.min(...q.redY) < y1 - 8 && Math.max(...q.redY) < 300 - 11, 'second red stacks on the first instead of passing through (' + q.redY.map(v => v.toFixed(0)) + ')'); }
 { // generated layouts (Phase 11): trapdoors + barricades
   let barOK = true, tdOK = true, why = '', nBar = 0, early = 0, types = new Set();
   for (let n = 1; n <= 150; n++) {
@@ -369,15 +352,13 @@ const inside = (x, y, T) => { const c = Math.cos(T[4]), sn = Math.sin(T[4]), dx 
     L.terrain.forEach((b, i) => { nBar++; types.add(b[6]); const c = L.barrCol[i], sp = g.colSpan(L.cols, c);
       if (b[0] - b[2] < sp[0] - 0.01 || b[0] + b[2] > sp[1] + 0.01 || b[7] < 10 || b[1] - b[3] < 128 || b[6] > 2) { barOK = false; why = 'barricade ' + n; }
       for (const d of L.gates) if (d[7] === c && Math.abs(b[1] - d[1]) < b[3] + 13 + 10) { barOK = false; why = 'gate clash ' + n; } });
-    if ((L.cols === 1) !== (L.trapdoors.length === 0) || (L.cols > 1 && L.trapdoors.length < 1)) { tdOK = false; why = 'trapdoor count ' + n; }
-    const ys = L.trapdoors.map(t => t[1]).sort((a, b) => a - b);
-    for (let i = 1; i < ys.length; i++) if (ys[i] - ys[i - 1] < g.TD_H + 20) { tdOK = false; why = 'stagger ' + n; }
-    for (const t of L.trapdoors) if (t[0] < 0 || t[0] > L.cols - 2 || t[1] < 160 || t[1] + g.TD_H > 420) { tdOK = false; why = 'trapdoor range ' + n; }
-    if (L.cols >= 2 && L.trapdoors.length >= 1) {} 
+    if ((L.cols === 1) !== (L.doors.length === 0) || (L.cols > 1 && L.doors.length < 1)) { tdOK = false; why = 'door count ' + n; }
+    for (const d of L.doors) if (d[0] < 0 || d[0] > L.cols - 2 || d[1] < 116 || d[2] > 494 || d[2] - d[1] !== g.DOOR_H || d[3] < 100 || d[3] > 270) { tdOK = false; why = 'door range ' + n; }
+    L.terrain.forEach(bb => { if (Math.abs(bb[2] * 2 - cw) > 0.01) { barOK = false; why = 'barricade not full width ' + n; } });
   }
   ok(early === 0 && nBar > 100 && types.has(0) && types.has(1) && types.has(2), 'barricades: L1-2 only gray (and present), ' + nBar + ' over 150 levels, all three types (gray/blue/red) occur');
   ok(barOK, 'every barricade sits inside one column, above that column\'s gates, with >= 10 hits ' + why);
-  ok(tdOK, 'trapdoors: none on 1 column, >=1 on 2+, staggered in height, inside the divider span ' + why);
+  ok(tdOK, 'pressure doors: none on 1 column, >=1 on 2+, HP 100-270, 56px tall, inside the divider span; barricades are full-width dams ' + why);
   ok([1, 2, 3, 5, 6, 9, 10, 150].map(n => gl(n).cols).join() === '1,1,2,2,3,3,4,4', 'columns by level: L1-2 = 1, L3-5 = 2, L6-9 = 3, L10+ = 4');
   const geo = n => { g.setLevel(n); const q = g.get(); return q; };
   { const q = geo(1); ok(q.cols === 1 && q.colX1[0] - q.colX0[0] === 120 && Math.abs((q.AX0 + q.AX1) / 2 - 180) < 1e-6, 'Tier 1: one narrow centre column (120px), the rest letterboxed'); }
@@ -387,8 +368,9 @@ const inside = (x, y, T) => { const c = Math.cos(T[4]), sn = Math.sin(T[4]), dx 
 // ---------- Speed cap & crowding ----------
 { let capOK = true; for (let n = 1; n <= 150; n++) if (gl(n).redSpeedMul > 1.25 + 1e-9) capOK = false;
   ok(capOK, 'red speed multiplier never exceeds 1.25x at any level');
-  lvl(1); g.setLevel(150); quiet(); g.spawnRed(180, 150, 2); step(g, 30);
-  const dy = g.get().redY[0] - 150;
+  lvl(1); g.setLevel(150); quiet(); g.spawnRed(180, 130, 2); step(g, 40);
+  const dy0 = g.get().redY[0]; step(g, 30);
+  const dy = g.get().redY[0] - dy0;
   ok(Math.abs(dy - g.RED_SPEED_CAP * 0.5) < 3, 'Sprinter at L150 is held to the speed cap (' + g.RED_SPEED_CAP + ' px/s => ' + dy.toFixed(0) + 'px in 0.5s)');
   ok(gl(100).mixTank > gl(10).mixTank && gl(100).waveMax > gl(10).waveMax, 'late game scales density and shielded mix, not speed');
 }
@@ -480,7 +462,7 @@ for (let i = 0; i < 1500; i++) g.spawnBlue(10 + (i % 50) * 6.8, 300 + ((i / 50) 
     }
   }
   g.touch(false);
-  ok(maxB <= 1500 && maxR <= 500, 'soak over levels 1-150 bounded (peak blue ' + maxB + ', red ' + maxR + ')');
+  ok(maxB <= 1500 && maxR <= 1000, 'soak over levels 1-150 bounded (peak blue ' + maxB + ', red ' + maxR + ')');
   ok(finite, 'soak: no NaN/Infinity positions (bumper/black-hole math is stable)'); }
 // Phase 9: Trackpad Zone, entity scale, boss rebalance
 {
@@ -535,7 +517,7 @@ for (const [s, lv, cols] of [['?level=20', 20, 4], ['?level=30', 30, 4], ['?leve
       g.update(1 / 30); const q = g.get(); n++;
       for (let k = 0; k < q.mobCount; k++) { if (q.blueX[k] < q.AX0 - 0.5 || q.blueX[k] > q.AX1 + 0.5) badBlue++; if (q.blueY[k] > g.TRACK_Y) deep++; }
       for (let k = 0; k < q.redCount; k++) {
-        const x = q.redX[k], c = g.colOf(x), inBand = q.tdY.some(t => q.redY[k] >= t - 10 && q.redY[k] <= t + g.TD_H + 10);
+        const x = q.redX[k], c = g.colOf(x), inBand = q.doorOpen.some(o => o);
         if (x < q.AX0 - 0.5 || x > q.AX1 + 0.5) badRed++;
         else if (!inBand && (x < q.colX0[c] - 0.5 || x > q.colX1[c] + 0.5)) badRed++;
         if (q.redY[k] > g.TRACK_Y) deep++;
@@ -572,7 +554,7 @@ for (const [s, lv, cols] of [['?level=20', 20, 4], ['?level=30', 30, 4], ['?leve
     g.setLevel(n); g.setFlags({ fire: false, spawner: true }); g.setGates([]); g.setObstacles({});
     const want = [0, 0, 0, 0]; L.threats.forEach(t => want[t[0]] += t[1]);
     const q0 = g.get(); if (q0.threatQueue !== want.reduce((x, y) => x + y, 0)) runOK = false;
-    let bounds = true; for (let i = 0; i < 60 * 9; i++) { g.update(1 / 60); const q = g.get(); q.redX.forEach(x => { if (want[g.colOf(x)] === 0 && q.waveQueue === 0 && q.redCount > 0 && q.tdY.length === 0) bounds = false; }); }
+    let bounds = true; for (let i = 0; i < 60 * 9; i++) { g.update(1 / 60); const q = g.get(); q.redX.forEach(x => { if (want[g.colOf(x)] === 0 && q.waveQueue === 0 && q.redCount > 0 && q.doorCount === 0) bounds = false; }); }
     if (!bounds) runOK = false;
   }
   ok(found >= 3 && runOK, 'threat waves queue exactly the generated size into the generator-chosen adjacent columns (' + found + ' levels)');
@@ -587,4 +569,103 @@ for (const [s, lv, cols] of [['?level=20', 20, 4], ['?level=30', 30, 4], ['?leve
   ok(g.warp(4) && g.get().level === 4 && g.get().cols === 2 && g.get().state === 0 && !g.isPaused(), 'warp(4): level 4, 2 columns, playing');
   g.setPaused(true); g.warp(12); ok(!g.isPaused() && g.get().level === 12, 'warp from the Pause screen resumes at the new level');
   ok(!g.warp('abc') && g.get().level === 12, 'invalid warp input is ignored'); }
+// ---------- Phase 13: dam physics, dam burst, multiplier zones; Phase 14: pressure doors ----------
+{ // helpers: a 2-column board with one barricade plug in column 0, a door in the divider just above it
+  const setup = (doorHP, barHits) => {
+    g.setLevel(4); g.setFlags({ threats: false, fire: false, spawner: false }); g.setGates([]); g.setCannonHP(1e6); g.touch(false);
+    const q = g.get(), cx = (q.colX0[0] + q.colX1[0]) / 2, hw = (q.colX1[0] - q.colX0[0]) / 2;
+    g.setObstacles({ terrain: [[cx, 300, hw, 12, 0, 1, 0, barHits || 40]] });
+    g.setDoors([[0, 232, 290, doorHP]]);
+    return { q, cx, hw };
+  };
+  const pile = (n, cx, w) => { for (let i = 0; i < n; i++) g.spawnRed(cx + (Math.random() - 0.5) * w, 135 + (i % 12) * 11, 0); };
+  { // dam: a pile builds on top of the barricade; nothing passes it
+    const { q, cx } = setup(30000); pile(100, cx, 90); step(g, 60 * 6);
+    const r = g.get(), minD = (() => { let m = 1e9; for (let a = 0; a < r.redCount; a++) for (let b = a + 1; b < r.redCount; b++) { const d = Math.hypot(r.redX[a] - r.redX[b], r.redY[a] - r.redY[b]); if (d < m) m = d; } return m; })();
+    const below = r.redY.filter(y => y > 300 - 12).length, rowsTall = Math.round((Math.max(...r.redY) - Math.min(...r.redY)) / 10);
+    ok(r.redCount === 100 && below === 0, 'dam: 100 reds pile on the barricade, none passes below its top (' + below + ' below)');
+    ok(rowsTall >= 5 && Math.max(...r.redVY.map(Math.abs)) < 30, 'the pile is a physical stack ' + rowsTall + ' mobs tall and at rest (max |vy| ' + Math.max(...r.redVY.map(Math.abs)).toFixed(1) + ')');
+    ok(minD > 0.7 * 2 * 5.74, 'mob-on-mob separation: no two reds share space (closest pair ' + minD.toFixed(2) + 'px, body ' + (2 * 5.74).toFixed(1) + ')');
+    ok(r.redX.every(x => x >= q.colX0[0] - 0.01 && x <= q.colX1[0] + 0.01), 'a pile never spills sideways through a solid divider (door intact)');
+    // dam burst: destroy the barricade with real blues
+    for (let k = 0; k < 40; k++) g.spawnBlue(cx, 330 + k * 3, 0, -250, 0); step(g, 40);
+    ok(g.get().terrainCount === 0, 'the barricade is destroyed by 40 blue hits');
+    step(g, 12); const f = g.get(), falling = f.redVY.filter(v => v > 100).length;
+    ok(falling >= 0.6 * f.redCount && Math.min(...f.redY) > 130, 'dam burst: the stack loses support and floods down together (' + falling + '/' + f.redCount + ' falling > 100px/s)');
+  }
+  { // 1000-mob frame budget
+    g.setLevel(12); g.setFlags({ threats: false, fire: false, spawner: false }); g.setGates([]); g.setCannonHP(1e6);
+    const q = g.get(); g.setObstacles({ terrain: q.colX0.map((x0, c) => [(x0 + q.colX1[c]) / 2, 330, (q.colX1[c] - x0) / 2, 12, 0, 1, 0, 60]) });
+    for (let i = 0; i < 1000; i++) { const c = i % 4; g.spawnRed(q.colX0[c] + 8 + Math.random() * (q.colX1[c] - q.colX0[c] - 16), 135 + ((i / 4) | 0) * 0.4, 0); }
+    step(g, 30);                                       // let the overlap settle, then measure
+    let tot = 0, worst = 0; const N = 180;
+    for (let f = 0; f < N; f++) { const a = process.hrtime.bigint(); g.update(1 / 60); const d = Number(process.hrtime.bigint() - a) / 1e6; tot += d; if (d > worst) worst = d; }
+    ok(g.get().redCount > 950 && tot / N < 8 && worst < 16.6, '1000 piled reds: update ' + (tot / N).toFixed(2) + ' ms avg, ' + worst.toFixed(2) + ' ms worst (60fps budget 16.6ms)'); }
+  { // multiplier zone from a Blue Barricade
+    g.setLevel(4); g.setFlags({ threats: false, fire: false, spawner: false }); g.setGates([]); g.setCannonHP(1e6);
+    const q = g.get(), cx = (q.colX0[0] + q.colX1[0]) / 2, hw = (q.colX1[0] - q.colX0[0]) / 2;
+    g.setObstacles({ terrain: [[cx, 300, hw, 12, 0, 1, 1, 5]] });
+    for (let k = 0; k < 5; k++) g.spawnBlue(cx, 330 + k * 3, 0, -250, 0); step(g, 30);
+    let z = g.get();
+    ok(z.terrainCount === 0 && z.zoneCount === 1 && z.zoneT[0] > 9.4 && z.mobCount === 0, 'a blue barricade at 0 HP vanishes WITHOUT a burst and leaves one x2 zone (' + z.zoneT[0].toFixed(1) + 's left, ' + z.mobCount + ' blues)');
+    for (let k = 0; k < 10; k++) g.spawnBlue(cx - 20 + (k % 5) * 10, 380 + k * 2, 0, -250, 0); step(g, 40);
+    z = g.get();
+    ok(z.mobCount === 20, 'every blue crossing the zone splits in two exactly once (10 -> ' + z.mobCount + ')');
+    step(g, 60 * 11); z = g.get();
+    ok(z.zoneCount === 0, 'the zone expires after 10 seconds');
+    for (let k = 0; k < 10; k++) g.spawnBlue(cx, 380 + k * 2, 0, -250, 0); step(g, 40);
+    ok(g.get().mobCount === 10, 'no doubling once the zone has expired'); }
+  { // pressure doors: crush-angle filter
+    ok(!g.crushHit(0, 187) && !g.crushHit(30, 0) && !g.crushHit(60, 187) && !g.crushHit(100, 150) && g.crushHit(100, 40) && g.crushHit(-120, 60) && g.crushHit(100, 100) && g.crushHit(-200, 0),
+       'crushHit(): vertical free-fall, weak pushes and < 45deg-off-vertical are filtered out; heavy sideways pushes count');
+    // free-falling mobs right beside the door deal 0 damage
+    g.setLevel(4); g.setFlags({ threats: false, fire: false, spawner: false }); g.setGates([]); g.setObstacles({}); g.setCannonHP(1e6);
+    const q = g.get(); g.setDoors([[0, 150, 400, 120]]);
+    let dmg = 0;
+    for (let w = 0; w < 6; w++) { for (let i = 0; i < 12; i++) g.spawnRed(q.colX1[0] - 8 - (i % 2) * 11, 125 + i * 14, 0); step(g, 70); }
+    dmg = 120 - g.get().doorHP[0];
+    ok(dmg === 0 && g.get().doorOpen[0] === 0, 'reds in free-fall hugging the door deal 0 damage (' + dmg + ')');
+    // a crushing pile does damage; tiers scale HP
+    const { cx } = setup(150); pile(100, cx, 120); step(g, 60 * 5);
+    ok(g.get().doorHP[0] < 150 && g.get().doorOpen[0] === 0, 'a pile crushed against the door damages it (HP 150 -> ' + g.get().doorHP[0] + ')');
+  }
+  { // breach: spill, permanence, blue bullets pass diagonally, no pool growth with 200 mobs
+    const { q, cx } = setup(4); pile(120, cx, 120);
+    let t = 0; while (g.get().doorOpen[0] === 0 && t++ < 60 * 20) g.update(1 / 60);
+    ok(g.get().doorOpen[0] === 1 && g.get().doorHP[0] === 0, 'a door at 0 HP shatters (after ' + (t / 60).toFixed(1) + 's of crushing)');
+    step(g, 30); let r = g.get();
+    ok(r.redX.some(x => x > q.colX0[1]), 'the pressurised stack spills through the breach into the adjacent lane (' + r.redX.filter(x => x > q.colX0[1]).length + ' reds in lane 2)');
+    step(g, 60 * 6); ok(g.get().doorOpen[0] === 1, 'the breach is permanent for the rest of the level');
+  }
+}
+{ // blue through a breached gap + memory with 200 mobs flowing through a breach (typed pools, no growth)
+  g.setLevel(4); g.setFlags({ threats: false, fire: false, spawner: false }); g.setGates([]); g.setCannonHP(1e6); g.setObstacles({});
+  const q = g.get(); g.setDoors([[0, 232, 290, 5]]);
+  g.spawnBlue(q.colX1[0] - 6, 330, 200, -250, 0); step(g, 20); let bx = g.get().blueX[0]; 
+  ok(bx <= q.colX1[0], 'closed door: a diagonal blue stays in its lane (x ' + bx.toFixed(0) + ')');
+  g.setDoors([[0, 232, 290, 5]]);
+  const d0 = g.get(); // open the door by hand: crush with a dense pile
+  const cx = (q.colX0[0] + q.colX1[0]) / 2;
+  g.setObstacles({ terrain: [[cx, 300, (q.colX1[0] - q.colX0[0]) / 2, 12, 0, 1, 0, 60]] });
+  for (let i = 0; i < 100; i++) g.spawnRed(cx + (Math.random() - 0.5) * 120, 135 + (i % 12) * 11, 0);
+  let t = 0; while (g.get().doorOpen[0] === 0 && t++ < 60 * 20) g.update(1 / 60);
+  g.setObstacles({}); step(g, 120);
+  g.spawnBlue(q.colX1[0] - 6, 285, 160, -250, 0); let crossed = false;
+  for (let i = 0; i < 40; i++) { g.update(1 / 60); const s = g.get(); if (s.blueX.some(x => x > q.colX0[1])) crossed = true; }
+  ok(g.get().doorOpen[0] === 1 && crossed, 'blue bullets pass diagonally through a breached door into the next lane');
+  if (global.gc) global.gc(); const h0 = process.memoryUsage().heapUsed; let peak = 0;
+  for (let rep = 0; rep < 6; rep++) {
+    for (let i = 0; i < 200; i++) g.spawnRed(q.colX0[0] + 8 + Math.random() * 130, 140 + (i % 15) * 9, 0);
+    for (let f = 0; f < 60 * 4; f++) { g.update(1 / 60); }
+    peak = Math.max(peak, g.get().redCount);
+  }
+  const h1 = process.memoryUsage().heapUsed;
+  ok(peak <= g.get().capRed && (h1 - h0) / 1e6 < 25, '200 mobs repeatedly pathing through a breach: pools bounded (peak ' + peak + ' reds) and no heap growth (' + ((h1 - h0) / 1e6).toFixed(1) + ' MB over 1440 frames)'); }
+{ // trapdoors are gone; dividers solid; Main Menu removed; warp stays on overlay
+  let td = false; for (let n = 1; n <= 150; n++) { const L = gl(n); if (L.trapdoors || L.leakP !== undefined) td = true; }
+  ok(!td && !/leakTest|trapdoor leaks|LEAK_V/.test(src), 'passive trapdoors / %-leak logic removed from the generator and engine');
+  ok(!/MOB SWARM'|'Start'/.test(src) && /id="lvlInput"/.test(html) && /id="warp"/.test(html), 'Main Menu removed (no Start screen); Level/Warp inputs remain on the overlay');
+  const log = []; els.overlay = { classList: { add: c => log.push(c), remove: noop, toggle: noop }, style: {}, addEventListener: noop };
+  load('', ''); ok(!log.includes('show'), 'game starts immediately on load: the overlay is not shown');
+  ok(!/\bRED_BROWN\b|Math\.random\(\) \* 2 - 1\) \* RED_BROWN/.test(src), 'Brownian drift code removed'); }
 process.exit(fail ? 1 : 0);

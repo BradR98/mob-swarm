@@ -56,3 +56,7 @@ TBD.
 ## Dev level warp
 
 Use the Level box + Warp button on the menu/pause/end screens to jump to any level (`?level=N` also works outside the PWA). Columns: L1-2 one, L3-5 two, L6-9 three, L10+ four.
+
+## Swarm physics
+
+Reds fall under gravity and pile up on barricades like a dam; destroy the barricade and the pile floods down. Blue barricades leave a 10s x2 zone. Lane dividers are solid except for Pressure Doors, which only break when the swarm is crushed sideways against them.

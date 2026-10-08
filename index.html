@@ -95,7 +95,7 @@
       <button id="restart" type="button">Next Level</button>
       <div id="warpRow"><label for="lvlInput">Level</label><input id="lvlInput" type="number" inputmode="numeric" min="1" max="9999" value="1"><button id="warp" type="button">Warp</button></div>
     </div>
-    <span id="ver">v12 · c11</span>
+    <span id="ver">v14 · c12</span>
     <button id="pause" type="button" aria-label="Pause game" title="Pause">&#10074;&#10074;</button>
     <button id="mute" type="button" aria-label="Mute audio" title="Mute / unmute">&#128266;</button>
   </div>
@@ -154,7 +154,7 @@
   var CANNON_MAX_HP = 5;
   var MAX_DT = 1 / 20;           // clamp huge frame gaps
   var FUNNEL = 0.7;              // 0 = waves from center, 1 = exactly over the blue cluster
-  var RED_BROWN = 700, RED_BROWN_MAX = 55;          // reds random-walk sideways (Brownian drift): they never aim at the player
+  var RED_GRAV = 1100, RED_ITERS = 4;               // Phase 13: reds fall under gravity (to a terminal speed) and are solved as a physical pile
   var BLUE_ATTRACT = 0, BLUE_ATTRACT_MAX = 70;    // blue lateral accel toward red mass
 
   var MAX_LEVEL = 100;           // HUD denominator; generator keeps working beyond it
@@ -198,14 +198,23 @@
   var FIELD_TOP = 128, LANE_BOTTOM = 494;                      // terrain lives between the base and the muzzle (shots spawn at 504)
   var GATE_SLOTS = [354, 316, 278, 240];                       // gate rows inside a column, bottom to top (38px apart)
   // ---------- Phase 11: discrete columns (1-4), dividers with trapdoors ----------
-  var COL_W = [0, 120, 150, 104, 80], DIV_W = 8, TD_H = 36, MAX_COLS = 4, MAX_TD = 3, LEAK_V = 170;
+  var COL_W = [0, 120, 150, 104, 80], DIV_W = 8, MAX_COLS = 4, MAX_DOORS = 3, DOOR_H = 56;
   function columnCount(n) { return n <= 2 ? 1 : (n <= 5 ? 2 : (n <= 9 ? 3 : 4)); }   // Phase 12: L1-2 / 3-5 / 6-9 / 10+
   function colSpan(nc, c) {                                     // [x0, x1] of column c when nc columns are active (centred)
     var cw = COL_W[nc], tot = nc * cw + (nc - 1) * DIV_W, ax0 = (W - tot) / 2, x0 = ax0 + c * (cw + DIV_W);
     return [x0, x0 + cw];
   }
   var colN = 1, colX0 = new Float32Array(MAX_COLS), colX1 = new Float32Array(MAX_COLS), AX0 = 0, AX1 = W;
-  var tdCount = 0, tdDiv = new Int8Array(MAX_TD), tdY = new Float32Array(MAX_TD), leakP = 0.3;
+  // Phase 14: pressure doors embedded in the lane dividers (solid until their HP is crushed to 0)
+  var CRUSH_MIN_VX = 45, CRUSH_CD = 0.3, BREACH_V = 150;   // lateral push (px/s) needed to hurt a door; seconds between hits per mob; spill speed on breach
+  var doorCount = 0, doorDiv = new Int8Array(MAX_DOORS), doorY0 = new Float32Array(MAX_DOORS), doorY1 = new Float32Array(MAX_DOORS);
+  var doorHP = new Int16Array(MAX_DOORS), doorMax = new Int16Array(MAX_DOORS), doorOpen = new Uint8Array(MAX_DOORS), doorFlash = new Float32Array(MAX_DOORS);
+  // Phase 13: x2 multiplier zones left behind by shattered Blue Barricades
+  var ZONE_TIME = 10, ZONE_H = 30, MAX_ZONES = 4, ZONE_BIT = 64;
+  var zoneFlash = 0, zoneCount = 0, zoneCol = new Int8Array(MAX_ZONES), zoneY = new Float32Array(MAX_ZONES), zoneT = new Float32Array(MAX_ZONES);
+  // Crush-angle filter: a red only damages a pressure door when it hits with heavy LATERAL force: |vx| is high and the
+  // collision vector is more than 45 degrees off the vertical (|vx| >= |vy|). Free-falling mobs deal 0.
+  function crushHit(vx, vy) { vx = vx < 0 ? -vx : vx; vy = vy < 0 ? -vy : vy; return vx >= CRUSH_MIN_VX && vx >= vy; }
   function setColumns(nc) {
     colN = nc;
     for (var c = 0; c < nc; c++) { var sp = colSpan(nc, c); colX0[c] = sp[0]; colX1[c] = sp[1]; }
@@ -294,13 +303,7 @@
       var dx = Math.abs(x - pc[0]) - pc[2], dy = Math.abs(y - pc[1]) - pc[3];
       dx = dx > 0 ? dx : 0; dy = dy > 0 ? dy : 0; return dx * dx + dy * dy;
     }
-    L.trapdoors = []; L.terrainEff = 1; L.barrCol = [];
-    if (nc >= 2) {
-      var perm = [0, 1, 2].slice(0, nc - 1), pj, pt;
-      for (i = perm.length - 1; i > 0; i--) { pj = (rnd() * (i + 1)) | 0; pt = perm[i]; perm[i] = perm[pj]; perm[pj] = pt; }
-      for (i = 0; i < nc - 1; i++) if (i === 0 || rnd() < 0.8) L.trapdoors.push([i, Math.round(168 + perm[i] * 78 + rnd() * 18)]);
-    }
-    L.leakP = 0.25 + rnd() * 0.15;
+    L.doors = []; L.terrainEff = 1; L.barrCol = [];
     // Phase 12: L1-2 spawn only gray blocks. Blue barricades (rewards) never share a column and each one carries a
     // Threat Budget: a dense red wave in an ADJACENT column, sized by the barricade's hit value.
     var nbar = n <= 2 ? n : Math.min(MAX_TERRAIN, 2 + (((n - 3) / 4) | 0)), bk, blueUsed = [false, false, false, false];
@@ -315,13 +318,28 @@
       var by = yMin + rnd() * (yMax - yMin), clash = false;
       for (j = 0; j < L.terrain.length; j++) if (L.barrCol[j] === c && Math.abs(L.terrain[j][1] - by) < 46) clash = true;
       if (clash) continue;
-      var bw = Math.round(cw * (0.55 + rnd() * 0.15)), left = rnd() < 0.5, bx0 = colSpan(nc, c)[0], hits = Math.min(60, Math.round(10 + n * 0.5));
-      L.terrain.push([left ? bx0 + bw / 2 : bx0 + cw - bw / 2, by, bw / 2, 10, 0, left ? 1 : -1, typ, hits]);
+      var bx0 = colSpan(nc, c)[0], hits = Math.min(60, Math.round(10 + n * 0.5));
+      L.terrain.push([bx0 + cw / 2, by, cw / 2, 12, 0, 1, typ, hits]);   // Phase 13: a barricade plugs its whole column (a dam)
       L.barrCol.push(c);
       if (typ === 1) {
         blueUsed[c] = true;
         var adj = c === 0 ? 1 : (c === nc - 1 ? nc - 2 : (rnd() < 0.5 ? c - 1 : c + 1));
         L.threats.push([adj, Math.max(THREAT_MIN, Math.min(THREAT_MAX, Math.round(hits * THREAT_K))), c, hits]);
+      }
+    }
+
+    // --- Phase 14: pressure doors in the dividers. Placed where a dam's pile will press: just above a barricade of either
+    //     neighbouring column when there is one. HP 100-250 by tier. ---
+    if (nc >= 2) {
+      var perm = [0, 1, 2].slice(0, nc - 1), pj, pt, dHP = Math.min(250, 100 + (tier - 1) * 15);
+      for (i = perm.length - 1; i > 0; i--) { pj = (rnd() * (i + 1)) | 0; pt = perm[i]; perm[i] = perm[pj]; perm[pj] = pt; }
+      for (i = 0; i < nc - 1; i++) {
+        if (i > 0 && rnd() > 0.8) continue;
+        var dy1 = 0;
+        for (j = 0; j < L.terrain.length; j++) if ((L.barrCol[j] === i || L.barrCol[j] === i + 1) && L.terrain[j][6] !== 255) dy1 = Math.max(dy1, L.terrain[j][1] + 6);
+        if (!dy1) dy1 = 200 + perm[i] * 60 + rnd() * 20;
+        if (dy1 - DOOR_H < BASE_BOTTOM + 4) dy1 = BASE_BOTTOM + 4 + DOOR_H;
+        L.doors.push([i, Math.round(dy1 - DOOR_H), Math.round(dy1), dHP + ((rnd() * 20) | 0)]);
       }
     }
 
@@ -432,8 +450,8 @@
     var bx = tCX[k], by = tCY[k], hw = tHW[k], type = tType[k], n = type === 2 ? Math.min(RED_BURST_MAX, 4 + (tMax[k] >> 3)) : (tMax[k] > 12 ? BURST_MAX : 6 + (tMax[k] >> 1)), j;
     removeBarricade(k);
     spawnPop(bx, by);
-    if (type === 1) {                           // blue: a burst of blue mobs shoots upward (gate bits all set: they are past every gate)
-      for (j = 0; j < n; j++) if (!spawnMob(bx + (Math.random() * 2 - 1) * (hw - MOB_R), by - 4 - Math.random() * 6, (Math.random() - 0.5) * 50, -MOB_SPEED, 63)) break;
+    if (type === 1) {                           // blue: leaves a translucent x2 zone across its column for ZONE_TIME s
+      if (zoneCount < MAX_ZONES) { zoneCol[zoneCount] = colOf(bx); zoneY[zoneCount] = by; zoneT[zoneCount] = ZONE_TIME; zoneCount++; }
     } else if (type === 2) {                    // red: a burst of reds pours downward
       for (j = 0; j < n; j++) if (!spawnRed(bx + (Math.random() * 2 - 1) * (hw - RED_R), by + 8 + Math.random() * 8, 0)) break;
     }
@@ -469,7 +487,11 @@
   var rvx = new Float32Array(MAX_RED);
   var rkx = new Float32Array(MAX_RED);     // knock velocity from bumpers / black holes (decays)
   var rky = new Float32Array(MAX_RED);
-  var rlk = new Int8Array(MAX_RED);         // trapdoor state: 0 undecided, +-1 leaking, 2 stays
+  var rvy = new Float32Array(MAX_RED);     // Phase 13: real vertical velocity (gravity, halts when supported)
+  var rpx = new Float32Array(MAX_RED), rpy = new Float32Array(MAX_RED);   // position at the start of the step (velocity = displacement / dt)
+  var rcr = new Float32Array(MAX_RED);     // lateral wall overshoot accumulated this step (the crush push)
+  var rcd = new Float32Array(MAX_RED);     // per-mob door-hit cooldown
+  var rside = new Int8Array(MAX_RED);
   var rdead = new Uint8Array(MAX_RED);
   var rtype = new Uint8Array(MAX_RED);     // Bestiary type id
   var rhp = new Uint8Array(MAX_RED);       // red shield: RED_HP blues to destroy one red
@@ -478,8 +500,13 @@
     type = type | 0;
     if (redCount >= MAX_RED || y + RT_RAD[type] > TRACK_Y) return false;
     var i = redCount++;
-    rx[i] = x; ry[i] = y; rvx[i] = 0; rkx[i] = 0; rky[i] = 0; rlk[i] = 0; rdead[i] = 0; rhp[i] = RT_HP[type]; rtype[i] = type;
+    rx[i] = x; ry[i] = y; rvx[i] = 0; rvy[i] = 40; rkx[i] = 0; rky[i] = 0; rcr[i] = 0; rcd[i] = 0; rside[i] = 0; rdead[i] = 0; rhp[i] = RT_HP[type]; rtype[i] = type;
     return true;
+  }
+
+  function copyRed(w, i) {
+    rx[w] = rx[i]; ry[w] = ry[i]; rvx[w] = rvx[i]; rvy[w] = rvy[i]; rhp[w] = rhp[i]; rtype[w] = rtype[i]; rkx[w] = rkx[i]; rky[w] = rky[i];
+    rcr[w] = rcr[i]; rcd[w] = rcd[i]; rside[w] = rside[i];
   }
 
   // ---------- Spatial grid for blue-vs-red (linked lists in typed arrays, zero allocation) ----------
@@ -689,8 +716,8 @@
     threatClock = 0;
     for (var tc2 = 0; tc2 < MAX_COLS; tc2++) { tq[tc2] = 0; ta[tc2] = 0; }
     if (threatsOn) for (var th = 0; th < L.threats.length; th++) if (L.threats[th][0] < colN) tq[L.threats[th][0]] += L.threats[th][1];
-    leakP = L.leakP; tdCount = L.trapdoors.length;
-    for (var td = 0; td < tdCount; td++) { tdDiv[td] = L.trapdoors[td][0]; tdY[td] = L.trapdoors[td][1]; }
+    doorCount = L.doors.length; zoneCount = 0;
+    for (var dk = 0; dk < doorCount; dk++) { doorDiv[dk] = L.doors[dk][0]; doorY0[dk] = L.doors[dk][1]; doorY1[dk] = L.doors[dk][2]; doorHP[dk] = doorMax[dk] = L.doors[dk][3]; doorOpen[dk] = 0; doorFlash[dk] = 0; }
     crateActive = false; crateTimer = CRATE_MIN + Math.random() * (CRATE_MAX - CRATE_MIN); pillCount = 0;
     powerLeft = 0; powerName = ''; setWeapon(Armory[baseWeaponName]);
     baseHeat = 0; ghostHP = baseHP; cannonFlash = 0;
@@ -821,16 +848,21 @@
     }
   }
 
-  // Red crowding: overlapping reds push each other apart (position-based, uniform-grid broadphase, no allocation)
-  function separateReds() {
-    var cols = Math.ceil(W / 24), rows = Math.ceil(H / 24), i, c;
+  // Red crowding: overlapping reds push each other apart (position-based, uniform-grid broadphase, no allocation).
+  // The grid is built once per step; the pair pass runs RED_ITERS times inside the solver.
+  var RG_COLS = Math.ceil(W / 24), RG_ROWS = Math.ceil(H / 24);
+  function buildRedGrid() {
+    var i, c;
     for (c = 0; c < rgHead.length; c++) rgHead[c] = -1;
     for (i = 0; i < redCount; i++) {
       if (rdead[i]) continue;
       var gx = (rx[i] / 24) | 0, gy = (ry[i] / 24) | 0;
-      gx = gx < 0 ? 0 : (gx >= cols ? cols - 1 : gx); gy = gy < 0 ? 0 : (gy >= rows ? rows - 1 : gy);
-      c = gy * cols + gx; rgNext[i] = rgHead[c]; rgHead[c] = i;
+      gx = gx < 0 ? 0 : (gx >= RG_COLS ? RG_COLS - 1 : gx); gy = gy < 0 ? 0 : (gy >= RG_ROWS ? RG_ROWS - 1 : gy);
+      c = gy * RG_COLS + gx; rgNext[i] = rgHead[c]; rgHead[c] = i;
     }
+  }
+  function separateReds() {
+    var cols = RG_COLS, rows = RG_ROWS, i;
     for (i = 0; i < redCount; i++) {
       if (rdead[i]) continue;
       var cx = (rx[i] / 24) | 0, cy = (ry[i] / 24) | 0;
@@ -843,13 +875,33 @@
             if (d2 >= rr * rr) continue;
             var d = Math.sqrt(d2);
             if (d < 0.001) { dx = (i & 1) ? 0.5 : -0.5; dy = 0.3; d = 0.583; }
-            var push = (rr - d) * 0.5 * 0.6 / d;                      // 60% of the overlap resolved per frame
+            var ov = rr - d; if (ov > 3) ov = 3;                      // cap the shove so a crush can never tunnel a mob through a barricade
+            var push = ov * 0.5 * 0.9 / d;                            // mobs never share a pixel: 90% of the overlap per pass
             rx[i] -= dx * push; ry[i] -= dy * push; rx[j] += dx * push; ry[j] += dy * push;
           }
         }
       }
     }
   }
+  // Closed pressure door touching red i (column rc, pushing toward `side`) or -1
+  function doorAt(rc, side, y, rad) {
+    var d = side > 0 ? rc : rc - 1;
+    for (var k = 0; k < doorCount; k++) if (doorDiv[k] === d && !doorOpen[k] && y >= doorY0[k] - rad && y <= doorY1[k] + rad) return k;
+    return -1;
+  }
+  function breachDoor(k, side) {                 // the door shatters for good; the pressurised stack spills through the gap
+    doorOpen[k] = 1; doorHP[k] = 0;
+    var d = doorDiv[k], mx0 = (colX1[d] + colX0[d + 1]) * 0.5, my0 = (doorY0[k] + doorY1[k]) * 0.5, j;
+    for (j = 0; j < 5; j++) spawnPop(mx0 + (Math.random() - 0.5) * 10, my0 + (Math.random() - 0.5) * (doorY1[k] - doorY0[k]));
+    sfxHit();
+    var from = side > 0 ? d : d + 1;
+    for (j = 0; j < redCount; j++) {
+      if (ry[j] < doorY0[k] - 40 || ry[j] > doorY1[k] + 40) continue;
+      if (colOf(rx[j]) !== from) continue;
+      rkx[j] = side * BREACH_V; rvx[j] = side * BREACH_V * 0.5;
+    }
+  }
+  function hitDoor(k, side) { doorHP[k]--; doorFlash[k] = 1; sfxHit(); if (doorHP[k] <= 0) breachDoor(k, side); }
 
   function spawnCrate() {
     crateActive = true; crateHP = CRATE_HP;
@@ -922,6 +974,12 @@
       pipeStream(dt); threatStream(dt);
       if (!crateActive && level > 2) { crateTimer -= dt; if (crateTimer <= 0) spawnCrate(); }
     }
+    for (k = zoneCount - 1; k >= 0; k--) {          // multiplier zones expire; doors cool their crack flash
+      zoneT[k] -= dt;
+      if (zoneT[k] <= 0) { zoneCount--; zoneCol[k] = zoneCol[zoneCount]; zoneY[k] = zoneY[zoneCount]; zoneT[k] = zoneT[zoneCount]; }
+    }
+    for (k = 0; k < doorCount; k++) if (doorFlash[k] > 0) doorFlash[k] -= dt * 4;
+    if (zoneFlash > 0) zoneFlash -= dt * 4;
     if (powerLeft > 0) { powerLeft -= dt; if (powerLeft <= 0) { powerLeft = 0; powerName = ''; setWeapon(Armory[baseWeaponName]); } }
 
     // Red mass centroid (for blue attraction); the boss is the red mass on boss levels
@@ -948,7 +1006,10 @@
         var a = (redCX - x) * BLUE_ATTRACT;
         vx += (a > BLUE_ATTRACT_MAX ? BLUE_ATTRACT_MAX : (a < -BLUE_ATTRACT_MAX ? -BLUE_ATTRACT_MAX : a)) * dt;
       }
-      var bc = colOf(mx[i]), bl = colX0[bc] + MOB_R, br = colX1[bc] - MOB_R;      // blues never leave their column
+      var bc = colOf(mx[i]), bl = colX0[bc] + MOB_R, br = colX1[bc] - MOB_R;      // blues never leave their column...
+      for (k = 0; k < doorCount; k++) {                                          // ...except through a breached pressure door
+        if (doorOpen[k] && (bc === doorDiv[k] || bc === doorDiv[k] + 1) && y >= doorY0[k] && y <= doorY1[k]) { bl = colX0[doorDiv[k]] + MOB_R; br = colX1[doorDiv[k] + 1] - MOB_R; break; }
+      }
       if (x < bl) { x = bl; vx = -vx; }
       else if (x > br) { x = br; vx = -vx; }
 
@@ -1051,6 +1112,16 @@
         if (gateKilled) { killMob(i); continue; }
       }
 
+      // Multiplier zones (from shattered Blue Barricades): a blue passing through splits into two (once per mob)
+      if (zoneCount && !(mmask[i] & ZONE_BIT)) {
+        for (k = 0; k < zoneCount; k++) {
+          var zc = zoneCol[k];
+          if (x + MOB_R >= colX0[zc] && x - MOB_R <= colX1[zc] && y + MOB_R >= zoneY[k] - ZONE_H / 2 && y - MOB_R <= zoneY[k] + ZONE_H / 2) {
+            mmask[i] |= ZONE_BIT; spawnMob(x + 3, y - 2, 30 + Math.random() * 40, vy, mmask[i]); sfxGate(); zoneFlash = 1; break;
+          }
+        }
+      }
+
       // Opponent base (on boss levels the base is shielded: it absorbs blues without damage)
       if (y <= BASE_BOTTOM) {
         if (x >= 10 && x <= W - 10) {
@@ -1068,32 +1139,20 @@
     blueN = bN;
     blueCX = bN > 0 ? bSum / bN : W / 2;
 
-    // Red mobs march down. They never aim at the player: each one random-walks sideways (Brownian drift), which with
-    // the wall-sliding physics and crowding spreads the stream until it fills the whole width of its lane like water.
+    // Red mobs (Phase 13 "dam" physics): they fall straight down under gravity (no random drift). Every step is
+    // integrate -> solve constraints (mob-vs-mob separation, barricade tops, lane walls) -> velocity = displacement / dt,
+    // so a mob resting on a barricade really has zero velocity and the mobs behind it pile up on top of it.
     var killedBlue = 0, killedRed = 0;
-    var rdy = redSpeed * dt;
-    var v = 0;
-    var bd = 1 - Math.min(1, dt * 1.5);
     var kd = 1 - Math.min(1, dt * 2.5);
     for (i = 0; i < redCount; i++) {
-      v = rvx[i] * bd + (Math.random() * 2 - 1) * RED_BROWN * dt;
-      v = v > RED_BROWN_MAX ? RED_BROWN_MAX : (v < -RED_BROWN_MAX ? -RED_BROWN_MAX : v);
-      var rrad = RT_RAD[rtype[i]], rcl = colOf(rx[i]), rlo = colX0[rcl] + rrad, rhi = colX1[rcl] - rrad, rlkv = rlk[i], inBand = 0;
-      for (k = 0; k < tdCount; k++) {                 // trapdoor: a share of the cluster leaks sideways into the neighbouring column
-        if (ry[i] >= tdY[k] && ry[i] <= tdY[k] + TD_H && (rcl === tdDiv[k] || rcl === tdDiv[k] + 1)) {
-          inBand = 1;
-          if (rlkv === 0) rlkv = rlk[i] = Math.random() < leakP ? (rcl === tdDiv[k] ? 1 : -1) : 2;
-          if (rlkv === 1 || rlkv === -1) { v = rlkv * LEAK_V; rlo = colX0[tdDiv[k]] + rrad; rhi = colX1[tdDiv[k] + 1] - rrad; }
-          break;
-        }
-      }
-      if (!inBand) rlk[i] = 0;
-      rvx[i] = v;
-      rkx[i] *= kd; rky[i] *= kd;
-      var nx = rx[i] + (v + rkx[i]) * dt;
+      var rrad = RT_RAD[rtype[i]];
       var rspd = redSpeed * RT_SPEED[rtype[i]]; if (rspd > RED_SPEED_CAP) rspd = RED_SPEED_CAP;
-      var ny = ry[i] + rspd * dt + rky[i] * dt;
-      nx = nx < rlo ? rlo : (nx > rhi ? rhi : nx);
+      var vyy = rvy[i] + RED_GRAV * dt; if (vyy > rspd) vyy = rspd;
+      rpx[i] = rx[i]; rpy[i] = ry[i]; rcr[i] = 0;
+      if (rcd[i] > 0) rcd[i] -= dt;
+      rkx[i] *= kd; rky[i] *= kd;
+      var nx = rx[i] + (rvx[i] + rkx[i]) * dt;
+      var ny = ry[i] + (vyy + rky[i]) * dt;
       if (ny < BASE_BOTTOM + RED_R) { ny = BASE_BOTTOM + RED_R; if (rky[i] < 0) rky[i] = 0; }
 
       for (k = 0; k < bumpCount; k++) {          // bumpers knock reds off course
@@ -1102,7 +1161,7 @@
         if (rd2 < rrr * rrr) {
           var rd = Math.sqrt(rd2) || 0.001, rnx = rdx / rd, rny = rdyy / rd;
           nx = bumpX[k] + rnx * (rrr + 0.1); ny = bumpY[k] + rny * (rrr + 0.1);
-          var rdot = (v + rkx[i]) * rnx + (redSpeed + rky[i]) * rny;
+          var rdot = (rvx[i] + rkx[i]) * rnx + (vyy + rky[i]) * rny;
           if (rdot < 0) { rkx[i] += -1.8 * rdot * rnx; rky[i] += -1.8 * rdot * rny; }
           sfxBump();
         }
@@ -1117,24 +1176,40 @@
           rkx[i] += (qux - quy * 0.35) * qp; rky[i] += (quy + qux * 0.35) * qp;
         }
       }
-      if (terrainCount && terrainResolve(nx, ny, RT_RAD[rtype[i]])) {      // slide: only the normal component is removed
-        nx = pX; ny = pY;
-        if (thNY < -0.5 || thNY > 0.5) nx += (thTY < -0.2 ? -thTX : thTX) * RED_SLIDE * dt;       // head-on against a flat face: slide round the end
-      }
-      rx[i] = nx; ry[i] = ny;
+      rvy[i] = vyy; rx[i] = nx; ry[i] = ny;
       if (eaten) { rdead[i] = 1; killedRed++; spawnPop(nx, ny); }
     }
 
-    // Crowding: reds shove each other, then terrain re-resolves so nobody is squeezed into a wall
-    if (redCount > 1) {
-      separateReds(); separateReds();
+    if (redCount > 0) {
+      buildRedGrid();
+      for (var it = 0; it < RED_ITERS; it++) {
+        separateReds();
+        for (i = 0; i < redCount; i++) {         // barricade tops / lane walls / pressure doors
+          var rr0 = RT_RAD[rtype[i]], qx2 = rx[i], qy2 = ry[i];
+          if (terrainCount && terrainResolve(qx2, qy2, rr0)) { qx2 = pX; qy2 = pY; }   // no sliding: a mob on a barricade simply stops
+          var qc = colOf(qx2), cl0 = colX0[qc] + rr0, cl1 = colX1[qc] - rr0;
+          for (k = 0; k < doorCount; k++) {      // a breached door is a gap that both neighbouring lanes can flow through
+            if (doorOpen[k] && (qc === doorDiv[k] || qc === doorDiv[k] + 1) && qy2 >= doorY0[k] && qy2 <= doorY1[k]) { cl0 = colX0[doorDiv[k]] + rr0; cl1 = colX1[doorDiv[k] + 1] - rr0; break; }
+          }
+          if (qx2 < cl0) { rcr[i] += cl0 - qx2; rside[i] = -1; qx2 = cl0; }
+          else if (qx2 > cl1) { rcr[i] += qx2 - cl1; rside[i] = 1; qx2 = cl1; }
+          rx[i] = qx2;
+          ry[i] = qy2 < BASE_BOTTOM + rr0 ? BASE_BOTTOM + rr0 : qy2;
+        }
+      }
+      var idt = dt > 0 ? 1 / dt : 0, dfr = 1 - Math.min(1, dt * 5);
       for (i = 0; i < redCount; i++) {
-        var rr0 = RT_RAD[rtype[i]], qx2 = rx[i], qy2 = ry[i];
-        if (terrainCount && terrainResolve(qx2, qy2, rr0)) { qx2 = pX; qy2 = pY; }
-        var cl0, cl1;
-        if (rlk[i] === 1 || rlk[i] === -1) { cl0 = AX0 + rr0; cl1 = AX1 - rr0; } else { var qc = colOf(qx2); cl0 = colX0[qc] + rr0; cl1 = colX1[qc] - rr0; }
-        rx[i] = qx2 < cl0 ? cl0 : (qx2 > cl1 ? cl1 : qx2);
-        ry[i] = qy2 < BASE_BOTTOM + rr0 ? BASE_BOTTOM + rr0 : qy2;
+        var vxn = (rx[i] - rpx[i]) * idt, vyn = (ry[i] - rpy[i]) * idt;
+        if (rcr[i] > 0 && rcd[i] <= 0 && doorCount) {          // Crush Angle: only heavy lateral pushes hurt a door
+          var pushV = rcr[i] * idt;
+          if (crushHit(pushV, vyn)) {
+            var dk2 = doorAt(colOf(rx[i]), rside[i], ry[i], RT_RAD[rtype[i]]);
+            if (dk2 >= 0) { rcd[i] = CRUSH_CD; hitDoor(dk2, rside[i]); }
+          }
+        }
+        vxn = vxn > 140 ? 140 : (vxn < -140 ? -140 : vxn);
+        rvx[i] = vxn * dfr;
+        rvy[i] = vyn < -40 ? -40 : vyn;
       }
     }
 
@@ -1195,7 +1270,7 @@
       var wr = 0;
       for (i = 0; i < redCount; i++) {
         if (rdead[i]) continue;
-        if (wr !== i) { rx[wr] = rx[i]; ry[wr] = ry[i]; rvx[wr] = rvx[i]; rhp[wr] = rhp[i]; rtype[wr] = rtype[i]; rkx[wr] = rkx[i]; rky[wr] = rky[i]; rlk[wr] = rlk[i]; }
+        if (wr !== i) copyRed(wr, i);
         rdead[wr] = 0;
         wr++;
       }
@@ -1209,7 +1284,7 @@
       if (ry[i] + RT_RAD[rtype[i]] >= CANNON_Y) {
         spawnPop(rx[i], CANNON_Y - 6);
         var l = --redCount;
-        if (i !== l) { rx[i] = rx[l]; ry[i] = ry[l]; rvx[i] = rvx[l]; rhp[i] = rhp[l]; rtype[i] = rtype[l]; rkx[i] = rkx[l]; rky[i] = rky[l]; rlk[i] = rlk[l]; }
+        if (i !== l) copyRed(i, l);
         rdead[i] = 0;
         hits++;
       } else i++;
@@ -1272,17 +1347,26 @@
       ctx.fillStyle = '#121a35'; ctx.fillRect(colX0[ci], BASE_BOTTOM, colX1[ci] - colX0[ci], TRACK_Y - BASE_BOTTOM);
       if (ci === cActive) { ctx.fillStyle = 'rgba(77,163,255,0.07)'; ctx.fillRect(colX0[ci], BASE_BOTTOM, colX1[ci] - colX0[ci], TRACK_Y - BASE_BOTTOM); }
     }
-    ctx.fillStyle = '#5b6483';                          // lane dividers, with trapdoor gaps
-    for (ci = 0; ci < colN - 1; ci++) {
-      var dx0 = colX1[ci], dyA = BASE_BOTTOM;
-      var tdk = -1; for (k = 0; k < tdCount; k++) if (tdDiv[k] === ci) tdk = k;
-      if (tdk < 0) ctx.fillRect(dx0, dyA, DIV_W, TRACK_Y - dyA);
-      else {
-        ctx.fillRect(dx0, dyA, DIV_W, tdY[tdk] - dyA);
-        ctx.fillRect(dx0, tdY[tdk] + TD_H, DIV_W, TRACK_Y - tdY[tdk] - TD_H);
-        ctx.fillStyle = 'rgba(255,200,90,0.55)'; ctx.fillRect(dx0, tdY[tdk], DIV_W, 2); ctx.fillRect(dx0, tdY[tdk] + TD_H - 2, DIV_W, 2);
-        ctx.fillStyle = '#5b6483';
+    ctx.fillStyle = '#5b6483';                          // lane dividers: solid, with pressure doors (HP counters) or breached gaps
+    for (ci = 0; ci < colN - 1; ci++) ctx.fillRect(colX1[ci], BASE_BOTTOM, DIV_W, TRACK_Y - BASE_BOTTOM);
+    for (k = 0; k < doorCount; k++) {
+      var dX = colX1[doorDiv[k]], dY0 = doorY0[k], dH = doorY1[k] - doorY0[k], dr = doorHP[k] / doorMax[k];
+      if (doorOpen[k]) {                                // breached: a gap through the divider
+        ctx.fillStyle = '#121a35'; ctx.fillRect(dX - 1, dY0, DIV_W + 2, dH);
+        ctx.fillStyle = 'rgba(255,170,70,0.6)'; ctx.fillRect(dX - 1, dY0, DIV_W + 2, 2); ctx.fillRect(dX - 1, dY0 + dH - 2, DIV_W + 2, 2);
+        continue;
       }
+      var dcol = dr > 0.66 ? '#e6c84a' : (dr > 0.33 ? '#f08a2e' : '#e0344a');   // yellow -> orange -> red as it takes damage
+      ctx.fillStyle = dcol; ctx.fillRect(dX - 5, dY0, DIV_W + 10, dH);
+      ctx.fillStyle = doorFlash[k] > 0 ? 'rgba(255,255,255,' + Math.min(0.9, doorFlash[k]) + ')' : 'rgba(0,0,0,0.25)'; ctx.fillRect(dX - 5, dY0, DIV_W + 10, dH);
+      ctx.strokeStyle = 'rgba(30,10,10,0.8)'; ctx.lineWidth = 1.5;
+      var ncrack = dr > 0.66 ? 0 : (dr > 0.33 ? 2 : 4);                           // cracks spread as HP drops
+      for (var ck = 0; ck < ncrack; ck++) {
+        var cy0 = dY0 + (ck + 0.5) * dH / ncrack;
+        ctx.beginPath(); ctx.moveTo(dX - 5, cy0); ctx.lineTo(dX + 1, cy0 + 5); ctx.lineTo(dX - 1, cy0 - 3); ctx.lineTo(dX + DIV_W + 5, cy0 + 4); ctx.stroke();
+      }
+      ctx.fillStyle = '#fff'; ctx.font = '900 14px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(String(doorHP[k]), dX + DIV_W / 2, dY0 + dH / 2);
     }
     ctx.fillStyle = '#5b6483';                          // outer walls of the active span
     ctx.fillRect(AX0 - 3, BASE_BOTTOM, 3, TRACK_Y - BASE_BOTTOM); ctx.fillRect(AX1, BASE_BOTTOM, 3, TRACK_Y - BASE_BOTTOM);
@@ -1389,6 +1473,14 @@
       ctx.fillStyle = edgeC; ctx.fillRect(tCX[i] - tHW[i] - 2, tCY[i] - tHH[i] - 2, tHW[i] * 2 + 4, tHH[i] * 2 + 4);
       ctx.fillStyle = fillC; ctx.fillRect(tCX[i] - tHW[i], tCY[i] - tHH[i], tHW[i] * 2, tHH[i] * 2);
       if (bt < 3) { ctx.fillStyle = '#fff'; ctx.fillText(String(tHits[i]), tCX[i], tCY[i] + 1); }
+    }
+    // Multiplier zones: translucent x2 band across the column with a countdown
+    for (i = 0; i < zoneCount; i++) {
+      var zx0 = colX0[zoneCol[i]], zw = colX1[zoneCol[i]] - zx0, za = 0.18 + 0.12 * Math.sin(clock * 6) + (zoneT[i] < 2 ? -0.1 : 0) + zoneFlash * 0.2;
+      ctx.fillStyle = 'rgba(80,190,255,' + (za < 0.05 ? 0.05 : za) + ')'; ctx.fillRect(zx0, zoneY[i] - ZONE_H / 2, zw, ZONE_H);
+      ctx.strokeStyle = 'rgba(140,220,255,0.7)'; ctx.lineWidth = 1.5; ctx.strokeRect(zx0, zoneY[i] - ZONE_H / 2, zw, ZONE_H);
+      ctx.fillStyle = '#fff'; ctx.font = '900 16px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('x2  ' + Math.ceil(zoneT[i]) + 's', zx0 + zw / 2, zoneY[i] + 1);
     }
     // Supply crate and falling pills
     if (crateActive) {
@@ -1527,7 +1619,10 @@
                  redX: sl.call(rx, 0, redCount), redY: sl.call(ry, 0, redCount), redHP: sl.call(rhp, 0, redCount), redType: sl.call(rtype, 0, redCount),
                  waveQueue: waveQueue, threatQueue: tq[0] + tq[1] + tq[2] + tq[3], tq: Array.prototype.slice.call(tq), crateTimer: crateTimer, terrainCount: terrainCount,
                  cols: colN, colX0: Array.prototype.slice.call(colX0, 0, colN), colX1: Array.prototype.slice.call(colX1, 0, colN), AX0: AX0, AX1: AX1,
-                 tdCount: tdCount, tdY: Array.prototype.slice.call(tdY, 0, tdCount), tdDiv: Array.prototype.slice.call(tdDiv, 0, tdCount),
+                 doorCount: doorCount, doorHP: Array.prototype.slice.call(doorHP, 0, doorCount), doorMax: Array.prototype.slice.call(doorMax, 0, doorCount), doorDiv: Array.prototype.slice.call(doorDiv, 0, doorCount),
+                 doorY0: Array.prototype.slice.call(doorY0, 0, doorCount), doorY1: Array.prototype.slice.call(doorY1, 0, doorCount), doorOpen: Array.prototype.slice.call(doorOpen, 0, doorCount),
+                 zoneCount: zoneCount, zoneCol: Array.prototype.slice.call(zoneCol, 0, zoneCount), zoneY: Array.prototype.slice.call(zoneY, 0, zoneCount), zoneT: Array.prototype.slice.call(zoneT, 0, zoneCount),
+                 redVY: Array.prototype.slice.call(rvy, 0, redCount), redVX: Array.prototype.slice.call(rvx, 0, redCount),
                  barr: (function () { var o = []; for (var q = 0; q < terrainCount; q++) o.push({ x: tCX[q], y: tCY[q], hw: tHW[q], hh: tHH[q], type: tType[q], hits: tHits[q] }); return o; })(), crateActive: crateActive, crateX: crateX, crateY: crateY, crateHP: crateHP,
                  pillCount: pillCount, pillX: sl.call(pillX, 0, pillCount), pillY: sl.call(pillY, 0, pillCount), powerName: powerName, powerLeft: powerLeft,
                  blueVX: sl.call(mvx, 0, mobCount), blueVY: sl.call(mvy, 0, mobCount),
@@ -1535,13 +1630,14 @@
       },
       aim: function (x) { targetX = x; cannonX = x; },
       touch: function (b) { dragging = !!b; },
+      setCannonHP: function (n) { cannonHP = n; },
       setBaseHP: function (n) { baseHP = n; ghostHP = n; },
       setBossHP: function (n) { bossHP = n; },
       spawnBoss: spawnBoss, calculateLevelMTM: calculateLevelMTM, tierOf: tierOf, levelThroughput: levelThroughput,
       Armory: Armory, RedMobTypes: RedMobTypes, equip: equip,
       RED_SPEED_CAP: RED_SPEED_CAP, CRATE_HP: CRATE_HP, POWER_TIME: POWER_TIME,
-      setTerrain: setTerrain, setColumns: setColumns, openField: function () { colN = 1; colX0[0] = 10; colX1[0] = W - 10; AX0 = 10; AX1 = W - 10; tdCount = 0; },
-      colOf: colOf, columnCount: columnCount, colSpan: colSpan, TD_H: TD_H, DIV_W: DIV_W, COL_W: COL_W, leakTest: function (p) { leakP = p; }, spawnCrate: spawnCrate, spawnPill: function (x, y, t) { spawnPill(x, y); if (t !== undefined) pillT[pillCount - 1] = t; },
+      setTerrain: setTerrain, setColumns: setColumns, openField: function () { colN = 1; colX0[0] = 10; colX1[0] = W - 10; AX0 = 10; AX1 = W - 10; doorCount = 0; },
+      colOf: colOf, columnCount: columnCount, colSpan: colSpan, DIV_W: DIV_W, DOOR_H: DOOR_H, COL_W: COL_W, crushHit: crushHit, setDoors: function (l) { doorCount = l.length; for (var q = 0; q < doorCount; q++) { doorDiv[q] = l[q][0]; doorY0[q] = l[q][1]; doorY1[q] = l[q][2]; doorHP[q] = doorMax[q] = l[q][3]; doorOpen[q] = 0; } }, spawnZone: function (c, y) { zoneCol[zoneCount] = c; zoneY[zoneCount] = y; zoneT[zoneCount] = ZONE_TIME; zoneCount++; }, ZONE_TIME: ZONE_TIME, redGravity: RED_GRAV, spawnCrate: spawnCrate, spawnPill: function (x, y, t) { spawnPill(x, y); if (t !== undefined) pillT[pillCount - 1] = t; },
       setCrateTimer: function (t) { crateTimer = t; }, queueWave: queueWave,
       // Dry-run of one blue launched at x0 (terrain only): returns {x: [...], t: [...]} where it crosses each y in ys (bots use this to aim round terrain)
       BOSS_PIPE_RATE: BOSS_PIPE_RATE, setPaused: setPaused, isPaused: function () { return paused; }, tuneBoss: function (w, i) { BOSS_WAVE_K = w; BOSS_INT_K = i; }, PIPE_RATE: PIPE_RATE, bossParams: function () { return { wave: bossWave, interval: bossInterval }; },
@@ -1581,10 +1677,6 @@
   syncMuteBtn();
   resize();
   reset();
-  if (!(typeof location !== 'undefined' && location.hash === '#debug')) {   // Main Menu: Start button + level warp (the game waits, paused, until Start)
-    paused = true; overlayTitle.textContent = 'MOB SWARM'; restartBtn.textContent = 'Start';
-    overlay.classList.remove('lose'); lvlInput.value = level; overlay.classList.add('show'); render();
-  }
   requestAnimationFrame(function (t) { last = t; requestAnimationFrame(frame); });
 })();
 </script>

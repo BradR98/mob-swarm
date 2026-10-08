@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Phase 13 + 14 - dam physics, multiplier zones, pressure doors
+- **UI:** the Phase 12 Main Menu is gone; the game starts immediately. Level/Warp stays on the Pause/Victory/Defeat overlay.
+- **Swarm physics (Phase 13):** Brownian drift removed. Reds fall under gravity (1100 px/s^2 to a terminal speed) and are solved position-based: integrate, then 4 passes of mob-vs-mob separation (uniform grid, capped shove) + barricade tops + lane walls, then velocity = displacement / dt. A red that lands on a barricade really stops; the mobs behind it stack into a pile. Barricades are now full-width plugs (dams), so nothing slides round them.
+- **Dam burst:** destroying a barricade removes the support; the whole pile accelerates down together.
+- **Multiplier zones:** a Blue Barricade at 0 HP no longer bursts. It leaves a translucent x2 zone across its column for 10s; each blue passing through splits into two, once per bullet (mask bit 6).
+- **Retired trapdoors (Phase 14):** the %-leak gaps are gone; dividers are solid.
+- **Pressure Doors:** 1 per divider (2+ columns), HP 100-250 (by tier), 56px tall, placed just above a neighbouring barricade so the dam's pile presses on it. Colour shifts yellow -> orange -> red with cracks as HP drops. Damage only comes from a red pushed into the door with heavy lateral force (`crushHit`: |vx| >= 45 px/s and |vx| >= |vy|, i.e. > 45 deg off vertical), 0.3s cooldown per mob; free-falling mobs deal 0.
+- **Breach:** a door at 0 HP is gone for the level; the stack that was pushing on it gets a sideways impulse and spills into the next lane; blue bullets can cross through the gap.
+- Debug hooks: `setDoors`, `setCannonHP`, `crushHit`, `spawnZone`. Version label `v14 · c12`, cache `mob-swarm-v12`.
+- Tests: 187 headless checks (dam stack, separation, dam burst, 1000-red frame cost 3.5ms avg, zone split/expiry, crush filter, breach spill, blue pass-through, no heap growth with 200 mobs through a breach).
+- Sims (bot ignores doors, aims one column): bosses L10/20/30/50 4/4 (TTK 45-66s vs 45s target); L1, L10, L16, L20, L50 4/4; L6 (3 cols) 0/4 dies at ~13s. Not device-tested.
+- Behaviour changes to watch: reds pile up so peak red counts are higher (soak bound raised to the 1000 pool); boss TTK and bot results changed (see sims).
+
 ### Phase 12 - aggressive pacing and threat budgeting
 - **Level selector:** Level input + Warp button on the Pause/Victory/Defeat overlay, plus a new Main Menu (Start + warp) on load. `?level=N` still works but no longer needed (the SW stripped it). Debug hook `__mob.warp(n)`.
 - **Columns:** L1-2 = 1, L3-5 = 2, L6-9 = 3, L10+ = 4.

@@ -87,3 +87,14 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done. Suggested model: **Sonnet** =
 | P12-2 | 1/2/3/4 columns at L1/3/6/10 | [x] | Sonnet |
 | P12-3 | Threat budget + anti-stacking | [x] | Pro |
 | P12-4 | Rebalance L6-L20 for multi-lane play (bot L16 0/3) | [ ] | Pro |
+
+## Phases 13-14: Dam physics, zones, pressure doors
+
+| ID | Task | Status | Model |
+|----|------|--------|-------|
+| P13-1 | Remove main menu | [x] | Sonnet |
+| P13-2 | Gravity + separation + barricade dams, dam burst | [x] | Pro |
+| P13-3 | Blue barricade -> 10s x2 zone | [x] | Pro |
+| P14-1 | Retire trapdoors, solid dividers | [x] | Sonnet |
+| P14-2 | Pressure doors, crush-angle damage, breach | [x] | Pro |
+| P14-3 | Real-device feel check: pile stability, door HP pacing, FPS | [ ] | - |
