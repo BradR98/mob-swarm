@@ -157,3 +157,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pause button (top right, left of mute): freezes the rAF loop (cancelAnimationFrame), PAUSED overlay with Resume; also auto-pauses when the tab is hidden.
 - Throughput derate per layout (bridge 0.9, fork 0.8, s-curve 0.75; x0.75 on bosses) from bot-sim.
 - Headless: 137 PASS / 0 FAIL, incl. independent 2px BFS proving a >=60px path exists on levels 1-150, row scan min open span 80px, bridge neck 80px.
+
+## Phase 15.1
+- fix: Level 99 sandbox cannon now fires (the sandbox had wrongly disabled player fire). Version v15.1 · c14.

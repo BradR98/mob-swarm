@@ -681,7 +681,7 @@ for (const [s, lv, cols] of [['?level=20', 20, 4], ['?level=30', 30, 4], ['?leve
   const w = load('#debug'); w.setFlags({ threats: false }); w.setLevel(99); const q0 = w.get();
   ok(q0.level === 99 && q0.cols === 1 && q0.colX1[0] - q0.colX0[0] === 320 && q0.gateCount === 0 && q0.doorCount === 0 && q0.barr.length === 1 && q0.barr[0].type === 255 && q0.barr[0].y > 440 && q0.barr[0].hw === 160,
      'L99 sandbox loads: 1 wide (320px) column, no gates/doors, one indestructible plug at the bottom (y ' + q0.barr[0].y + ')');
-  w.setCannonHP(5); w.touch(true); let maxLat = 0, width = 0, worstBelow = -1e9; const first = new Set(); let dupe = false;
+  w.setCannonHP(5); let maxLat = 0, width = 0, worstBelow = -1e9; const first = new Set(); let dupe = false;
   for (let f = 0; f < 60 * 25; f++) {
     w.update(1 / 60); const q = w.get();
     if (f < 120) { q.redX.forEach((x, k) => { if (q.redY[k] < 150) maxLat = Math.max(maxLat, Math.abs(q.redVX[k])); const key = x.toFixed(3) + ',' + q.redY[k].toFixed(3); }); const z = q.redX.filter((x, k) => q.redY[k] < 160); if (z.length > 2) width = Math.max(width, Math.max(...z) - Math.min(...z)); }
@@ -689,10 +689,12 @@ for (const [s, lv, cols] of [['?level=20', 20, 4], ['?level=30', 30, 4], ['?leve
     worstBelow = Math.max(worstBelow, ...q.redY.map(y => y - 456));
   }
   const q1 = w.get();
-  ok(q1.state === 0 && q1.cannonHP === 5 && q1.baseHP === q0.baseHP && q1.mobCount === 0, 'L99 never wins or loses and fires no blues (25s: state ' + q1.state + ', cannonHP ' + q1.cannonHP + ', blues ' + q1.mobCount + ')');
+  ok(q1.state === 0 && q1.cannonHP === 5 && q1.baseHP === q0.baseHP && q1.mobCount === 0, 'L99 never wins or loses (no auto-spawned blues) (25s: state ' + q1.state + ', cannonHP ' + q1.cannonHP + ', blues ' + q1.mobCount + ')');
   ok(q1.redCount >= 700 && q1.redCount <= 760, 'L99 pours ~30 reds/s continuously (' + q1.redCount + ' reds after 25s)');
   ok(worstBelow < 0, 'the indestructible plug holds: no red ever sinks below its top (worst ' + worstBelow.toFixed(1) + 'px)');
   ok(!dupe, 'spawn jitter: no two reds spawn on the same pixel');
   ok(width < 45 && maxLat < 100, 'the spawn stream stays a thick column, not an explosion (width ' + width.toFixed(0) + 'px, max lateral ' + maxLat.toFixed(0) + 'px/s)');
+  w.touch(true); for (let f = 0; f < 60 * 2; f++) w.update(1 / 60);
+  ok(w.get().mobCount > 0, 'L99 cannon fires when held (' + w.get().mobCount + ' blues after 2s)');
   w.touch(false); }
 process.exit(fail ? 1 : 0);

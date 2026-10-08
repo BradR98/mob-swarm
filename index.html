@@ -95,7 +95,7 @@
       <button id="restart" type="button">Next Level</button>
       <div id="warpRow"><label for="lvlInput">Level</label><input id="lvlInput" type="number" inputmode="numeric" min="1" max="9999" value="1"><button id="warp" type="button">Warp</button></div>
     </div>
-    <span id="ver">v15 · c13</span>
+    <span id="ver">v15.1 · c14</span>
     <button id="pause" type="button" aria-label="Pause game" title="Pause">&#10074;&#10074;</button>
     <button id="mute" type="button" aria-label="Mute audio" title="Mute / unmute">&#128266;</button>
   </div>
@@ -957,7 +957,7 @@
     cannonX += (targetX - cannonX) * Math.min(1, dt * 18);
     fireAcc += dt * FIRE_RATE;
     var fcol = colOf(cannonX), fl = colX0[fcol] + MOB_R + 1, fr = colX1[fcol] - MOB_R - 1, muzzleX = cannonX < fl ? fl : (cannonX > fr ? fr : cannonX);   // shots fly up the column the cannon aligns with
-    if (dragging && autoFire && !sandbox) {
+    if (dragging && autoFire) {
       while (fireAcc >= 1) {
         fireAcc -= 1;
         if ((fireCount++ % 3) === 0) sfxPop();       // every 3rd shot to keep audio light
