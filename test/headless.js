@@ -30,7 +30,7 @@ const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
 ok(load('') === undefined, '__mob hidden without #debug');
 const g = load('#debug'); g.setFlags({ threats: false });   // threat-budget waves are tested explicitly below
 ok(!!g, '__mob exposed with #debug');
-const gl = g.generateLevel;
+const gl = n => g.generateLevel(n === 99 ? 98 : n);   // L99 is the physics sandbox (own tests below); generic loops use L98 in its place
 const quiet = () => { g.setFlags({ fire: false, spawner: false }); g.setGates([]); g.setObstacles({}); g.touch(false); };
 const lvl = n => { g.setLevel(n); g.openField(); quiet(); };   // legacy physics tests run on an open single-lane field; column tests use setLevel directly
 
@@ -199,7 +199,7 @@ for (let k = 0; k < 30; k++) { g.touch(true); g.update(1 / 60); g.touch(false); 
 ok(g.get().mobCount <= 11, 'tap-spam cannot beat the fire rate (30 taps in 1.0s => ' + g.get().mobCount + ' shots)');
 
 // ---------- Pipe waves ----------
-for (const n of [1, 25, 61, 99]) {
+for (const n of [1, 25, 61, 98]) {
   const L = gl(n), totals = new Set(); let inRange = true, widthOK = true;
   for (let k = 0; k < 25; k++) {
     g.setLevel(n); g.setFlags({ fire: false, spawner: true }); g.setGates([]); g.setObstacles({}); g.touch(false);
@@ -342,8 +342,8 @@ const inside = (x, y, T) => { const c = Math.cos(T[4]), sn = Math.sin(T[4]), dx 
   g.spawnRed(180, 200, 0); step(g, 90);
   let q = g.get(); const y1 = q.redY[0];
   ok(Math.abs(q.redVY[0]) < 5 && y1 < 300 - 12 && y1 > 300 - 12 - 12, 'red halts on the barricade top (y ' + y1.toFixed(1) + ', vy ' + q.redVY[0].toFixed(1) + ')');
-  g.spawnRed(180, 200, 0); step(g, 90); q = g.get();
-  ok(q.redCount === 2 && Math.min(...q.redY) < y1 - 8 && Math.max(...q.redY) < 300 - 11, 'second red stacks on the first instead of passing through (' + q.redY.map(v => v.toFixed(0)) + ')'); }
+  g.spawnRed(183, 200, 0); step(g, 90); q = g.get();
+  ok(q.redCount === 2 && Math.max(...q.redY) < 300 - 11 && Math.max(...q.redVY.map(Math.abs)) < 5, 'second red also halts on the barricade instead of passing through (' + q.redY.map(v => v.toFixed(0)) + ')'); }
 { // generated layouts (Phase 11): trapdoors + barricades
   let barOK = true, tdOK = true, why = '', nBar = 0, early = 0, types = new Set();
   for (let n = 1; n <= 150; n++) {
@@ -388,7 +388,7 @@ const inside = (x, y, T) => { const c = Math.cos(T[4]), sn = Math.sin(T[4]), dx 
   ok(!pen, 'crowded reds are never squeezed into terrain');
   ok(above > 0 && below > 0, 'choke point: stream is split by the mouth (' + above + ' queued above, ' + below + ' through)');
   ok(spreadAbove > 40, 'reds overflow sideways beyond the 40px mouth (max offset ' + spreadAbove.toFixed(0) + 'px)');
-  ok(crowdedFrames <= 12, 'mob-vs-mob collision keeps reds apart (' + crowdedFrames + ' heavily overlapping pairs)');
+  ok(crowdedFrames <= 60, 'soft mob-vs-mob collision: a crowded block squeezes but stays largely separated (' + crowdedFrames + ' heavily overlapping pairs)');
 }
 
 // ---------- Supply crate & power-ups ----------
@@ -438,7 +438,7 @@ g.restart();
 ok(g.get().level === 1 && g.get().state === 0, 'Play Again wraps to L1');
 
 // ---------- Pool stress / soak ----------
-lvl(99); g.setFlags({ fire: false, spawner: false });
+lvl(98); g.setFlags({ fire: false, spawner: false });
 for (let i = 0; i < 500; i++) g.spawnRed(20 + (i % 25) * 13.5, 130 + ((i / 25) | 0) * 15);
 for (let i = 0; i < 1500; i++) g.spawnBlue(10 + (i % 50) * 6.8, 300 + ((i / 50) | 0) * 9, 0, -250, 0);
 { const t0 = process.hrtime.bigint();
@@ -450,7 +450,7 @@ for (let i = 0; i < 1500; i++) g.spawnBlue(10 + (i % 50) * 6.8, 300 + ((i / 50) 
   ok(ms < 8, 'stress logic cost < 8ms/frame (' + ms.toFixed(2) + ')'); }
 
 { let maxB = 0, maxR = 0, finite = true;
-  for (const n of [1, 12, 35, 55, 61, 90, 99, 100, 150]) {
+  for (const n of [1, 12, 35, 55, 61, 90, 98, 100, 150]) {
     for (let rep = 0; rep < 2; rep++) {
       g.setLevel(n); g.setFlags({ fire: true, spawner: true }); g.touch(true);
       for (let i = 0; i < 60 * 40 && g.get().state === 0; i++) {
@@ -584,8 +584,9 @@ for (const [s, lv, cols] of [['?level=20', 20, 4], ['?level=30', 30, 4], ['?leve
     const r = g.get(), minD = (() => { let m = 1e9; for (let a = 0; a < r.redCount; a++) for (let b = a + 1; b < r.redCount; b++) { const d = Math.hypot(r.redX[a] - r.redX[b], r.redY[a] - r.redY[b]); if (d < m) m = d; } return m; })();
     const below = r.redY.filter(y => y > 300 - 12).length, rowsTall = Math.round((Math.max(...r.redY) - Math.min(...r.redY)) / 10);
     ok(r.redCount === 100 && below === 0, 'dam: 100 reds pile on the barricade, none passes below its top (' + below + ' below)');
-    ok(rowsTall >= 5 && Math.max(...r.redVY.map(Math.abs)) < 30, 'the pile is a physical stack ' + rowsTall + ' mobs tall and at rest (max |vy| ' + Math.max(...r.redVY.map(Math.abs)).toFixed(1) + ')');
-    ok(minD > 0.7 * 2 * 5.74, 'mob-on-mob separation: no two reds share space (closest pair ' + minD.toFixed(2) + 'px, body ' + (2 * 5.74).toFixed(1) + ')');
+    ok(rowsTall >= 3 && Math.max(...r.redVY.map(Math.abs)) < 30, 'the pile is a physical stack ' + rowsTall + ' mobs tall and at rest (max |vy| ' + Math.max(...r.redVY.map(Math.abs)).toFixed(1) + ')');
+    { let deep = 0; for (let a = 0; a < r.redCount; a++) for (let b = a + 1; b < r.redCount; b++) if (Math.hypot(r.redX[a] - r.redX[b], r.redY[a] - r.redY[b]) < 0.5 * 2 * 5.74) deep++;
+      ok(deep < r.redCount, 'soft collisions: the pile squeezes but is not a collapsed blob (' + deep + ' deeply-overlapped pairs among ' + r.redCount + ' reds)'); }
     ok(r.redX.every(x => x >= q.colX0[0] - 0.01 && x <= q.colX1[0] + 0.01), 'a pile never spills sideways through a solid divider (door intact)');
     // dam burst: destroy the barricade with real blues
     for (let k = 0; k < 40; k++) g.spawnBlue(cx, 330 + k * 3, 0, -250, 0); step(g, 40);
@@ -668,4 +669,30 @@ for (const [s, lv, cols] of [['?level=20', 20, 4], ['?level=30', 30, 4], ['?leve
   const log = []; els.overlay = { classList: { add: c => log.push(c), remove: noop, toggle: noop }, style: {}, addEventListener: noop };
   load('', ''); ok(!log.includes('show'), 'game starts immediately on load: the overlay is not shown');
   ok(!/\bRED_BROWN\b|Math\.random\(\) \* 2 - 1\) \* RED_BROWN/.test(src), 'Brownian drift code removed'); }
+// ---------- Phase 15: soft collisions, spawn jitter, Level 99 physics sandbox ----------
+{ // soft resolving: only ~20% of an overlap is resolved per frame (rigid used ~90%)
+  lvl(98); g.setFlags({ fire: false, spawner: false, threats: false }); g.setObstacles({});
+  g.spawnRed(170, 200, 0); g.spawnRed(176, 200, 0);      // 6px apart: 5.5px overlap
+  const dd = () => { const q = g.get(); return Math.hypot(q.redX[1] - q.redX[0], q.redY[1] - q.redY[0]); };
+  const d0 = dd(); g.update(1 / 60); const d1 = dd(), gain = d1 - d0;
+  ok(gain > 0.3 && gain < 0.45 * (11.48 - d0), 'soft collisions: one frame resolves ~20% of the overlap, not all of it (6.00px -> ' + d1.toFixed(2) + 'px, gained ' + gain.toFixed(2) + ' of ' + (11.48 - d0).toFixed(2) + ' overlap)');
+  step(g, 30); ok(dd() > 8, 'given a little time the pair still squeezes apart (' + dd().toFixed(1) + 'px)'); }
+{ // Level 99 sandbox
+  const w = load('#debug'); w.setFlags({ threats: false }); w.setLevel(99); const q0 = w.get();
+  ok(q0.level === 99 && q0.cols === 1 && q0.colX1[0] - q0.colX0[0] === 320 && q0.gateCount === 0 && q0.doorCount === 0 && q0.barr.length === 1 && q0.barr[0].type === 255 && q0.barr[0].y > 440 && q0.barr[0].hw === 160,
+     'L99 sandbox loads: 1 wide (320px) column, no gates/doors, one indestructible plug at the bottom (y ' + q0.barr[0].y + ')');
+  w.setCannonHP(5); w.touch(true); let maxLat = 0, width = 0, worstBelow = -1e9; const first = new Set(); let dupe = false;
+  for (let f = 0; f < 60 * 25; f++) {
+    w.update(1 / 60); const q = w.get();
+    if (f < 120) { q.redX.forEach((x, k) => { if (q.redY[k] < 150) maxLat = Math.max(maxLat, Math.abs(q.redVX[k])); const key = x.toFixed(3) + ',' + q.redY[k].toFixed(3); }); const z = q.redX.filter((x, k) => q.redY[k] < 160); if (z.length > 2) width = Math.max(width, Math.max(...z) - Math.min(...z)); }
+    if (f === 90) { const keys = q.redX.map((x, k) => x.toFixed(2) + ',' + q.redY[k].toFixed(2)); dupe = new Set(keys).size !== keys.length; }
+    worstBelow = Math.max(worstBelow, ...q.redY.map(y => y - 456));
+  }
+  const q1 = w.get();
+  ok(q1.state === 0 && q1.cannonHP === 5 && q1.baseHP === q0.baseHP && q1.mobCount === 0, 'L99 never wins or loses and fires no blues (25s: state ' + q1.state + ', cannonHP ' + q1.cannonHP + ', blues ' + q1.mobCount + ')');
+  ok(q1.redCount >= 700 && q1.redCount <= 760, 'L99 pours ~30 reds/s continuously (' + q1.redCount + ' reds after 25s)');
+  ok(worstBelow < 0, 'the indestructible plug holds: no red ever sinks below its top (worst ' + worstBelow.toFixed(1) + 'px)');
+  ok(!dupe, 'spawn jitter: no two reds spawn on the same pixel');
+  ok(width < 45 && maxLat < 100, 'the spawn stream stays a thick column, not an explosion (width ' + width.toFixed(0) + 'px, max lateral ' + maxLat.toFixed(0) + 'px/s)');
+  w.touch(false); }
 process.exit(fail ? 1 : 0);

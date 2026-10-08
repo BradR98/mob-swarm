@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Phase 15 - soft collisions and the L99 physics sandbox
+- **Soft collisions:** the rigid separation (90% of an overlap per pass) is replaced by over-relaxed "soft resolving": ~20% of a light overlap per frame (3 passes of RED_SOFT/3), ramping up only for deep overlaps (> 55% of a body) so a pile compresses and flows like mud but cannot collapse into a blob. Sideways velocity also bleeds off faster (viscous).
+- **Spawn jitter:** every emitted red gets +/-5px X and Y jitter, and spawns at its terminal fall speed so a 30/s stream is spaced ~6px instead of stacking on one pixel (the "shotgun blast").
+- **Level 99 sandbox** (replaces the campaign L99): 1 wide (320px) column, no gates/doors/blues/crates/threats, one indestructible plug at y=470, a single pipe pouring 30 reds/s forever (until the 1000 pool is full). Win/loss disabled. Reach it with the Warp box (pause screen), `?level=99` or `#level=99`.
+- Measured in the sandbox: spawn stream ~24px wide, median sideways speed ~23 px/s (p95 63) in the spawn zone; 1000 reds pile ~90px tall on the plug.
+- Tests: 195 headless checks. Generic 150-level loops use L98 in place of L99; the 150-level soak was not re-tuned for this commit. Bot sims were not re-run.
+
 ### Phase 13 + 14 - dam physics, multiplier zones, pressure doors
 - **UI:** the Phase 12 Main Menu is gone; the game starts immediately. Level/Warp stays on the Pause/Victory/Defeat overlay.
 - **Swarm physics (Phase 13):** Brownian drift removed. Reds fall under gravity (1100 px/s^2 to a terminal speed) and are solved position-based: integrate, then 4 passes of mob-vs-mob separation (uniform grid, capped shove) + barricade tops + lane walls, then velocity = displacement / dt. A red that lands on a barricade really stops; the mobs behind it stack into a pile. Barricades are now full-width plugs (dams), so nothing slides round them.

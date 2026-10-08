@@ -60,3 +60,5 @@ Use the Level box + Warp button on the menu/pause/end screens to jump to any lev
 ## Swarm physics
 
 Reds fall under gravity and pile up on barricades like a dam; destroy the barricade and the pile floods down. Blue barricades leave a 10s x2 zone. Lane dividers are solid except for Pressure Doors, which only break when the swarm is crushed sideways against them.
+
+Level 99 is a physics sandbox (one wide column, 30 reds/s pouring onto an indestructible plug, no win/loss). Open it with the Warp box or `?level=99` / `#level=99`.

@@ -98,3 +98,12 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done. Suggested model: **Sonnet** =
 | P14-1 | Retire trapdoors, solid dividers | [x] | Sonnet |
 | P14-2 | Pressure doors, crush-angle damage, breach | [x] | Pro |
 | P14-3 | Real-device feel check: pile stability, door HP pacing, FPS | [ ] | - |
+
+## Phase 15: Soft collisions + sandbox
+
+| ID | Task | Status | Model |
+|----|------|--------|-------|
+| P15-1 | L99 physics sandbox | [x] | Pro |
+| P15-2 | Soft collision resolving | [x] | Pro |
+| P15-3 | Spawn jitter + terminal-speed spawns | [x] | Sonnet |
+| P15-4 | Re-tune door crush/pile balance + bot sims on soft physics | [ ] | Pro |

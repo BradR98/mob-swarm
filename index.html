@@ -95,7 +95,7 @@
       <button id="restart" type="button">Next Level</button>
       <div id="warpRow"><label for="lvlInput">Level</label><input id="lvlInput" type="number" inputmode="numeric" min="1" max="9999" value="1"><button id="warp" type="button">Warp</button></div>
     </div>
-    <span id="ver">v14 · c12</span>
+    <span id="ver">v15 · c13</span>
     <button id="pause" type="button" aria-label="Pause game" title="Pause">&#10074;&#10074;</button>
     <button id="mute" type="button" aria-label="Mute audio" title="Mute / unmute">&#128266;</button>
   </div>
@@ -154,7 +154,7 @@
   var CANNON_MAX_HP = 5;
   var MAX_DT = 1 / 20;           // clamp huge frame gaps
   var FUNNEL = 0.7;              // 0 = waves from center, 1 = exactly over the blue cluster
-  var RED_GRAV = 1100, RED_ITERS = 4;               // Phase 13: reds fall under gravity (to a terminal speed) and are solved as a physical pile
+  var RED_GRAV = 1100, RED_ITERS = 3, RED_SOFT = 0.2;               // Phase 13: reds fall under gravity (to a terminal speed) and are solved as a physical pile
   var BLUE_ATTRACT = 0, BLUE_ATTRACT_MAX = 70;    // blue lateral accel toward red mass
 
   var MAX_LEVEL = 100;           // HUD denominator; generator keeps working beyond it
@@ -173,6 +173,7 @@
   var TERRAIN_EFF = 0.93;                 // throughput kept per terrain piece (measured)
   var THREAT_K = 1.0, THREAT_MIN = 8, THREAT_MAX = 24, THREAT_DELAY = 10, THREAT_RATE = 14;   // threat budget: red wave size = THREAT_K x the blue barricade's hits
   var MAX_TERRAIN = 12, SLIDE_MIN = 70, RED_SLIDE = 90;   // min tangential slide speed so mobs never stall on a flat face
+  var SPAWN_JITTER = 5, SANDBOX_LEVEL = 99, SANDBOX_RATE = 30, SANDBOX_W = 320;   // Phase 15 physics sandbox (L99)
   var PIPE_RATE = 28;                     // reds/s leaving the pipe (spacing ~ 1 body at base speed)
   var CRATE_R = 16 * ES, CRATE_HP = 30, CRATE_SPEED = 16, CRATE_MIN = 15, CRATE_MAX = 20;   // supply crate
   var PILL_MAX = 4, PILL_SPEED = 100, POWER_TIME = 8, PILL_R = 10 * ES;
@@ -249,6 +250,13 @@
   // gate def: [width, y, type, n, label, startRight, speed]
   //   types: 'x' multiply, '+' add, '-' tax (destroys up to n, recharges), '/' halve (destroys every 2nd)
   function generateLevel(n) {
+    COL_W[1] = n === SANDBOX_LEVEL ? SANDBOX_W : 120;
+    if (n === SANDBOX_LEVEL) {                       // Phase 15: glass box. One wide column, an indestructible plug at the bottom, nothing else.
+      var sx0 = (W - SANDBOX_W) / 2;
+      return { n: n, tier: tierOf(n), baseHP: 1e6, mtm: 1, throughput: 0, isBoss: false, bossHP: 0, redInterval: 99, waveMin: 8, waveMax: 12, redSpeedMul: 1,
+               mixTank: 0, mixSprinter: 0, terrain: [[sx0 + SANDBOX_W / 2, 470, SANDBOX_W / 2, 14, 0, 1, 255, 0]], gates: [], bumpers: [], holes: [],
+               cols: 1, doors: [], threats: [], barrCol: [0], terrainEff: 1, sandbox: true };
+    }
     var rnd = rng32(n * 7919 + 12345);
     var isBoss = (n % 10) === 0;
     var tier = tierOf(n), tf = (tier - 1) * TIER_SIZE + 1;     // tier constants are those of the tier's first level
@@ -500,7 +508,7 @@
     type = type | 0;
     if (redCount >= MAX_RED || y + RT_RAD[type] > TRACK_Y) return false;
     var i = redCount++;
-    rx[i] = x; ry[i] = y; rvx[i] = 0; rvy[i] = 40; rkx[i] = 0; rky[i] = 0; rcr[i] = 0; rcd[i] = 0; rside[i] = 0; rdead[i] = 0; rhp[i] = RT_HP[type]; rtype[i] = type;
+    rx[i] = x; ry[i] = y; rvx[i] = 0; rvy[i] = redSpeed * RT_SPEED[type] > RED_SPEED_CAP ? RED_SPEED_CAP : redSpeed * RT_SPEED[type]; rkx[i] = 0; rky[i] = 0; rcr[i] = 0; rcd[i] = 0; rside[i] = 0; rdead[i] = 0; rhp[i] = RT_HP[type]; rtype[i] = type;
     return true;
   }
 
@@ -603,6 +611,7 @@
   var cannonHP = CANNON_MAX_HP;
   var mixTank = 0, mixSprinter = 0;
   var waveQueue = 0, wq = new Int16Array(MAX_COLS), pa = new Float32Array(MAX_COLS), waveCursor = 0;   // reds leave a pipe at the top of a column (or the boss) as a stream
+  var sandbox = false, sandAcc = 0;
   var tq = new Int16Array(MAX_COLS), ta = new Float32Array(MAX_COLS), threatsOn = true, threatClock = 0;   // threat-budget waves queued per column
   var crateActive = false, crateX = 0, crateY = 0, crateHP = 0, crateTimer = 17;
   var pillX = new Float32Array(PILL_MAX), pillY = new Float32Array(PILL_MAX), pillT = new Uint8Array(PILL_MAX), pillCount = 0;
@@ -699,6 +708,7 @@
   // Generates and loads the current `level` from scratch: pools, obstacles, state.
   function reset() {
     var L = generateLevel(level);
+    sandbox = !!L.sandbox; sandAcc = 0;
     setColumns(L.cols);
     mobCount = 0; redCount = 0;
     isBossLevel = L.isBoss;
@@ -808,9 +818,9 @@
     waveQueue += n;
   }
   function emitRed(c, cx, half) {
-    var rr = Math.random(), px = cx + (Math.random() * 2 - 1) * half;
+    var rr = Math.random(), px = cx + (Math.random() * 2 - 1) * half + (Math.random() * 2 - 1) * SPAWN_JITTER;   // jitter: never two mobs on the same pixel
     px = px < colX0[c] + RED_R ? colX0[c] + RED_R : (px > colX1[c] - RED_R ? colX1[c] - RED_R : px);
-    return spawnRed(px, (isBossLevel && bossActive ? bossY + BOSS_H / 2 - 6 : BASE_BOTTOM) + RED_R + 1, rr < mixSprinter ? 2 : (rr < mixSprinter + mixTank ? 1 : 0));
+    return spawnRed(px, (isBossLevel && bossActive ? bossY + BOSS_H / 2 - 6 : BASE_BOTTOM) + RED_R + 6 + (Math.random() * 2 - 1) * SPAWN_JITTER, rr < mixSprinter ? 2 : (rr < mixSprinter + mixTank ? 1 : 0));
   }
   function threatStream(dt) {
     if (!isBossLevel || bossActive) threatClock += dt;       // the budget starts bleeding in THREAT_DELAY s after play (boss: after it appears)
@@ -875,8 +885,10 @@
             if (d2 >= rr * rr) continue;
             var d = Math.sqrt(d2);
             if (d < 0.001) { dx = (i & 1) ? 0.5 : -0.5; dy = 0.3; d = 0.583; }
-            var ov = rr - d; if (ov > 3) ov = 3;                      // cap the shove so a crush can never tunnel a mob through a barricade
-            var push = ov * 0.5 * 0.9 / d;                            // mobs never share a pixel: 90% of the overlap per pass
+            var ov = rr - d, depth = ov / rr, ovc = ov > 5 ? 5 : ov;  // cap the shove so a crush can never tunnel a mob through a barricade
+            // Phase 15 soft collisions: ~20% of a light overlap is resolved per frame, so the swarm squeezes past itself like mud;
+            // the share ramps up with depth so a pile compresses but can never collapse into one blob
+            var push = ovc * 0.5 * ((RED_SOFT + (1 - RED_SOFT) * (depth > 0.55 ? (depth - 0.55) / 0.45 : 0)) / RED_ITERS) / d;
             rx[i] -= dx * push; ry[i] -= dy * push; rx[j] += dx * push; ry[j] += dy * push;
           }
         }
@@ -945,7 +957,7 @@
     cannonX += (targetX - cannonX) * Math.min(1, dt * 18);
     fireAcc += dt * FIRE_RATE;
     var fcol = colOf(cannonX), fl = colX0[fcol] + MOB_R + 1, fr = colX1[fcol] - MOB_R - 1, muzzleX = cannonX < fl ? fl : (cannonX > fr ? fr : cannonX);   // shots fly up the column the cannon aligns with
-    if (dragging && autoFire) {
+    if (dragging && autoFire && !sandbox) {
       while (fireAcc >= 1) {
         fireAcc -= 1;
         if ((fireCount++ % 3) === 0) sfxPop();       // every 3rd shot to keep audio light
@@ -958,7 +970,10 @@
     }
 
     // Opponent: normal levels spawn red walls; boss levels spawn one boss and nothing else
-    if (spawnerOn) {
+    if (sandbox) {                                   // sandbox pipe: 30 reds/s, forever, straight down the middle
+      sandAcc += dt * SANDBOX_RATE;
+      while (sandAcc >= 1) { sandAcc -= 1; if (!emitRed(0, (colX0[0] + colX1[0]) / 2, 0)) { sandAcc = 0; break; } }
+    } else if (spawnerOn) {
       redTimer -= dt;
       if (redTimer <= 0) {
         if (isBossLevel) {
@@ -970,7 +985,7 @@
       }
     }
 
-    if (spawnerOn) {
+    if (spawnerOn && !sandbox) {
       pipeStream(dt); threatStream(dt);
       if (!crateActive && level > 2) { crateTimer -= dt; if (crateTimer <= 0) spawnCrate(); }
     }
@@ -1197,7 +1212,7 @@
           ry[i] = qy2 < BASE_BOTTOM + rr0 ? BASE_BOTTOM + rr0 : qy2;
         }
       }
-      var idt = dt > 0 ? 1 / dt : 0, dfr = 1 - Math.min(1, dt * 5);
+      var idt = dt > 0 ? 1 / dt : 0, dfr = 1 - Math.min(1, dt * 12);   // viscous: sideways velocity bleeds off fast
       for (i = 0; i < redCount; i++) {
         var vxn = (rx[i] - rpx[i]) * idt, vyn = (ry[i] - rpy[i]) * idt;
         if (rcr[i] > 0 && rcd[i] <= 0 && doorCount) {          // Crush Angle: only heavy lateral pushes hurt a door
@@ -1289,7 +1304,7 @@
         hits++;
       } else i++;
     }
-    if (hits) {
+    if (hits && !sandbox) {
       cannonHP -= hits; cannonFlash = 1;
       sfxCannonHit();
       if (cannonHP <= 0) { cannonHP = 0; endGame(LOST); return; }
@@ -1384,6 +1399,10 @@
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillText('LEVEL ' + level + ' / ' + MAX_LEVEL, 14, 26);
+    if (sandbox) {
+      ctx.fillStyle = '#7dffb0'; ctx.font = '800 11px system-ui, sans-serif';
+      ctx.fillText('PHYSICS SANDBOX  -  reds ' + redCount, 14, 42);
+    }
     if (isBossLevel) {
       ctx.fillStyle = '#ff6a78';
       ctx.font = '800 11px system-ui, sans-serif';
@@ -1671,7 +1690,7 @@
 
   // Developer level warp: index.html?level=N starts directly at level N
   (function () {
-    var m = typeof location !== 'undefined' && location.search ? /[?&]level=(\d+)/.exec(location.search) : null;
+    var m = typeof location !== 'undefined' ? (/[?&]level=(\d+)/.exec(location.search || '') || /[#&]level=(\d+)/.exec(location.hash || '')) : null;
     if (m) level = Math.max(1, Math.min(9999, parseInt(m[1], 10)));
   })();
   syncMuteBtn();
