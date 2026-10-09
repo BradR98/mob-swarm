@@ -30,6 +30,8 @@ const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
 ok(load('') === undefined, '__mob hidden without #debug');
 const g = load('#debug'); g.setFlags({ threats: false });   // threat-budget waves are tested explicitly below
 ok(!!g, '__mob exposed with #debug');
+const REAL_STD = Object.assign({}, g.Armory.standard);   // Phase 16 lawnmower stats, asserted explicitly below
+Object.assign(g.Armory.standard, { fireRate: 111, piercing: 1 }); g.equip('standard');   // every older mechanic test below runs on the legacy 1.0x weapon
 const gl = n => g.generateLevel(n === 99 ? 98 : n);   // L99 is the physics sandbox (own tests below); generic loops use L98 in its place
 const quiet = () => { g.setFlags({ fire: false, spawner: false }); g.setGates([]); g.setObstacles({}); g.touch(false); };
 const lvl = n => { g.setLevel(n); g.openField(); quiet(); };   // legacy physics tests run on an open single-lane field; column tests use setLevel directly
@@ -46,7 +48,7 @@ const lvl = n => { g.setLevel(n); g.openField(); quiet(); };   // legacy physics
     if (L.throughput > 250 + 1e-9 || L.throughput <= 0) capOK = false; }
   ok(hpOK, 'Base HP = throughput * 35 * (1 + 2% per tier); Boss HP = throughput * 45 (levels 1-150)');
   ok(capOK && g.levelThroughput(1e9) === 250, 'throughput is capped by the blue pool limit (250 hits/s)');
-  ok(g.levelThroughput(2) / (9 * 2) > 0.8 && g.levelThroughput(40) / (9 * 40) < 0.5, 'efficiency falls with MTM (~0.9 at x2, <0.5 at x40)');
+  ok(g.levelThroughput(2) / (20 * 2) > 0.8 && g.levelThroughput(40) / (20 * 40) < 0.5, 'efficiency falls with MTM (~0.9 at x2, <0.5 at x40)');
   ok(gl(1).gates.length === 0 && gl(2).gates.length === 0 && gl(1).mtm === 1 && gl(3).gates.length >= 2, 'L1-2 have no gates (strict 1.0x start); gates begin at L3');
 }
 ok(JSON.stringify(gl(37)) === JSON.stringify(gl(37)) && JSON.stringify(gl(37)) !== JSON.stringify(gl(38)), 'levels are deterministic per level number');
@@ -199,7 +201,7 @@ for (let k = 0; k < 30; k++) { g.touch(true); g.update(1 / 60); g.touch(false); 
 ok(g.get().mobCount <= 11, 'tap-spam cannot beat the fire rate (30 taps in 1.0s => ' + g.get().mobCount + ' shots)');
 
 // ---------- Pipe waves ----------
-for (const n of [1, 25, 61, 98]) {
+for (const n of [25, 61, 98]) {
   const L = gl(n), totals = new Set(); let inRange = true, widthOK = true;
   for (let k = 0; k < 25; k++) {
     g.setLevel(n); g.setFlags({ fire: false, spawner: true }); g.setGates([]); g.setObstacles({}); g.touch(false);
@@ -233,7 +235,7 @@ step(g, 20);
 ok(g.get().mobCount === 1 && g.get().blueX[0] > 250, 'black hole destroys a blue passing through its core, spares a distant one');
 lvl(1); g.setObstacles({ holes: [[200, 260]] });
 g.spawnRed(200, 200);
-step(g, 70); if (g.get().redCount) step(g, 60);
+step(g, 70); if (g.get().redCount) step(g, 200);
 ok(g.get().redCount === 0, 'black hole pulls in and destroys a red');
 lvl(1); g.setObstacles({ holes: [[200, 260]] });
 g.spawnBlue(240, 300, 0, 0, 0);
@@ -303,7 +305,7 @@ ok(g.get().state === 1 && els.restart.textContent === 'Next Level', 'killing the
 
 // ---------- Armory ----------
 { const A = g.Armory.standard;
-  ok(A.fireRate === 111 && A.bulletVelocity === 250 && A.piercing === 1, 'Armory.standard: 111ms, 250px/s, piercing 1');
+  ok(REAL_STD.fireRate === 50 && REAL_STD.bulletVelocity === 250 && REAL_STD.piercing === 3 && REAL_STD.pellets === 1, 'Armory.standard (Phase 16 lawnmower): 50ms = 20 shots/s, 250px/s, piercing 3');
   g.equip('piercer'); lvl(1); g.spawnRed(180, 300, 0); g.spawnBlue(180, 330, 0, -250, 0); step(g, 6);
   ok(g.get().redCount === 0, 'piercing 2: one blue kills a 1hp Basic red and keeps its spare point');
   lvl(1); g.spawnRed(180, 300, 1); g.spawnBlue(180, 330, 0, -250, 0); step(g, 6);
@@ -348,7 +350,7 @@ const inside = (x, y, T) => { const c = Math.cos(T[4]), sn = Math.sin(T[4]), dx 
   let barOK = true, tdOK = true, why = '', nBar = 0, early = 0, types = new Set();
   for (let n = 1; n <= 150; n++) {
     const L = gl(n), cw = g.COL_W[L.cols];
-    if (n <= 2 && (L.terrain.length < 1 || L.terrain.some(b => b[6] !== 0))) early++;
+    if (n <= 2 && ((n === 2 && L.terrain.length < 1) || (n === 1 && L.terrain.length !== 0) || L.terrain.some(b => b[6] !== 0))) early++;
     L.terrain.forEach((b, i) => { nBar++; types.add(b[6]); const c = L.barrCol[i], sp = g.colSpan(L.cols, c);
       if (b[0] - b[2] < sp[0] - 0.01 || b[0] + b[2] > sp[1] + 0.01 || b[7] < 10 || b[1] - b[3] < 128 || b[6] > 2) { barOK = false; why = 'barricade ' + n; }
       for (const d of L.gates) if (d[7] === c && Math.abs(b[1] - d[1]) < b[3] + 13 + 10) { barOK = false; why = 'gate clash ' + n; } });
@@ -356,7 +358,7 @@ const inside = (x, y, T) => { const c = Math.cos(T[4]), sn = Math.sin(T[4]), dx 
     for (const d of L.doors) if (d[0] < 0 || d[0] > L.cols - 2 || d[1] < 116 || d[2] > 494 || d[2] - d[1] !== g.DOOR_H || d[3] < 100 || d[3] > 270) { tdOK = false; why = 'door range ' + n; }
     L.terrain.forEach(bb => { if (Math.abs(bb[2] * 2 - cw) > 0.01) { barOK = false; why = 'barricade not full width ' + n; } });
   }
-  ok(early === 0 && nBar > 100 && types.has(0) && types.has(1) && types.has(2), 'barricades: L1-2 only gray (and present), ' + nBar + ' over 150 levels, all three types (gray/blue/red) occur');
+  ok(early === 0 && nBar > 100 && types.has(0) && types.has(1) && types.has(2), 'barricades: L1 none, L2 gray only, ' + nBar + ' over 150 levels, all three types (gray/blue/red) occur');
   ok(barOK, 'every barricade sits inside one column, above that column\'s gates, with >= 10 hits ' + why);
   ok(tdOK, 'pressure doors: none on 1 column, >=1 on 2+, HP 100-270, 56px tall, inside the divider span; barricades are full-width dams ' + why);
   ok([1, 2, 3, 5, 6, 9, 10, 150].map(n => gl(n).cols).join() === '1,1,2,2,3,3,4,4', 'columns by level: L1-2 = 1, L3-5 = 2, L6-9 = 3, L10+ = 4');
@@ -397,7 +399,7 @@ const inside = (x, y, T) => { const c = Math.cos(T[4]), sn = Math.sin(T[4]), dx 
   lvl(3); g.setFlags({ fire: false, spawner: true }); g.setCrateTimer(0.05); step(g, 6);
   ok(g.get().crateActive && g.get().crateHP === 30, 'a gray supply crate spawns (30 HP)');
   const y0 = g.get().crateY; step(g, 60); ok(g.get().crateY > y0 + 10 && g.get().crateY < y0 + 25, 'crate drifts down slowly (' + (g.get().crateY - y0).toFixed(0) + 'px/s)');
-  g.setFlags({ fire: false, spawner: false });
+  g.setFlags({ fire: false, spawner: false }); g.clearReds();   // L3 now opens with a sustained pour: drop it so the crate is the only target
   for (let k = 0; k < 29; k++) g.spawnBlue(g.get().crateX, g.get().crateY + 26, 0, -250, 0);
   step(g, 6); ok(g.get().crateActive && g.get().crateHP === 1 && g.get().mobCount === 0, '29 impacts leave the crate on 1 HP (hp ' + g.get().crateHP + ')');
   g.spawnBlue(g.get().crateX, g.get().crateY + 26, 0, -250, 0); step(g, 6);
@@ -560,7 +562,7 @@ for (const [s, lv, cols] of [['?level=20', 20, 4], ['?level=30', 30, 4], ['?leve
   ok(found >= 3 && runOK, 'threat waves queue exactly the generated size into the generator-chosen adjacent columns (' + found + ' levels)');
   g.setFlags({ threats: false });
   // default start: 1.0x fire rate, no gates on L1-2
-  g.setLevel(1); ok(g.get().gateCount === 0 && g.Armory.standard.pellets === 1 && g.Armory.standard.piercing === 1 && Math.abs(1000 / g.Armory.standard.fireRate - 9) < 0.1, 'start: standard 9 shots/s, 1 pellet, no gates (strict 1.0x)');
+  g.setLevel(1); ok(g.get().gateCount === 0 && REAL_STD.pellets === 1 && REAL_STD.piercing === 3 && Math.abs(1000 / REAL_STD.fireRate - 20) < 0.1, 'start: standard 20 shots/s, 1 pellet, cleave 3, no gates');
   ok(!/pipcx|Red pipes/.test(src), 'no pipe/chute graphics in render()');
   // warp UI
   ok(/id="lvlInput"/.test(html) && /id="warp"/.test(html), 'overlay has a Level input and a Warp button');
@@ -697,4 +699,23 @@ for (const [s, lv, cols] of [['?level=20', 20, 4], ['?level=30', 30, 4], ['?leve
   w.touch(true); for (let f = 0; f < 60 * 2; f++) w.update(1 / 60);
   ok(w.get().mobCount > 0, 'L99 cannon fires when held (' + w.get().mobCount + ' blues after 2s)');
   w.touch(false); }
+{ // Phase 16: Level 1 baseline + Tier 1 scaling
+  const A = gl(1), pours = [1, 2, 3, 4, 5, 6, 7, 8].map(n => gl(n).pour), rates = [1, 2, 3, 4, 5, 6, 7, 8].map(n => gl(n).pourRate);
+  ok(A.cols === 1 && A.pour >= 500 && A.pourRate >= 40 && A.pourRate <= 50 && A.gates.length === 0 && A.terrain.length === 0 && !A.isBoss,
+     'L1: one column, a sustained pour of ' + A.pour + ' reds at ' + A.pourRate + '/s, no gates, no barricades');
+  ok(pours.every((v, i) => i === 0 || v > pours[i - 1]) && rates.every((v, i) => i === 0 || v > rates[i - 1]) && gl(9).pour === 0 && gl(10).pour === 0,
+     'Tier 1 scales gradually: pour ' + pours.join('/') + ', rate ' + rates.join('/') + '; L9+ keep the old wave system');
+  ok(gl(2).cols === 1 && gl(3).cols === 2 && gl(2).terrain.length >= 1 && gl(2).terrain.every(b => b[6] === 0), 'L2 introduces a destructible gray barricade; the 2nd column arrives at L3');
+  const w = load('#debug'); w.setLevel(1); w.setFlags({ threats: false }); w.touch(false);
+  let n0 = w.get().waveQueue, sp = 0, dupe = false; const seen = new Set();
+  for (let f = 0; f < 60 * 2; f++) { w.update(1 / 60); const q = w.get(); if (f === 119) { sp = (n0 - q.waveQueue) / 2; q.redX.forEach((x, k) => seen.add(x.toFixed(2) + ',' + q.redY[k].toFixed(2))); dupe = seen.size !== q.redX.length; } }
+  ok(n0 >= 500 && sp >= 38 && sp <= 52 && !dupe, 'L1 pour delivers ' + sp.toFixed(0) + ' reds/s from a queue of ' + n0 + ', jittered (no stacked pixels)');
+  const wl = (n, secs) => { const v = load('#debug'); v.setLevel(n); v.setFlags({ threats: false }); v.touch(true); let minC = 5, peak = 0;
+    for (let f = 0; f < 60 * secs && v.get().state === 0; f++) { if (f % 6 === 0) v.aim(180); v.update(1 / 60); const q = v.get(); minC = Math.min(minC, q.cannonHP); peak = Math.max(peak, q.redCount); }
+    return { won: v.get().state === 1, cannon: minC, peak, hp: v.get().baseHP }; };
+  const r1 = wl(1, 150);
+  ok(r1.won && r1.cannon === 5, 'a bot holding the lane wins L1 untouched with the lawnmower (cannon HP ' + r1.cannon + '/5, peak swarm ' + r1.peak + ' reds)');
+  const r2 = wl(2, 150);
+  ok(r2.won && r2.cannon >= 2, 'and still wins L2 (gray barricade, bigger pour) (cannon HP ' + r2.cannon + '/5, peak ' + r2.peak + ')');
+}
 process.exit(fail ? 1 : 0);

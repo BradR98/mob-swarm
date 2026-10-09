@@ -95,7 +95,7 @@
       <button id="restart" type="button">Next Level</button>
       <div id="warpRow"><label for="lvlInput">Level</label><input id="lvlInput" type="number" inputmode="numeric" min="1" max="9999" value="1"><button id="warp" type="button">Warp</button></div>
     </div>
-    <span id="ver">v15.1 · c14</span>
+    <span id="ver">v16 · c15</span>
     <button id="pause" type="button" aria-label="Pause game" title="Pause">&#10074;&#10074;</button>
     <button id="mute" type="button" aria-label="Mute audio" title="Mute / unmute">&#128266;</button>
   </div>
@@ -115,7 +115,7 @@
   // ---------- The Armory: player cannon stats ----------
   //   fireRate: ms between shots; bulletVelocity: px/s upward; piercing: red HP one blue can subtract before dying
   var Armory = {
-    standard: { name: 'Standard', fireRate: 111, bulletVelocity: 250, piercing: 1, pellets: 1, spreadVx: 0 },
+    standard: { name: 'Standard', fireRate: 50,  bulletVelocity: 250, piercing: 3, pellets: 1, spreadVx: 0, spread: 110 },   // Phase 16 "lawnmower": 20 shots/s, each blue cleaves 3 red HP
     piercer:  { name: 'Piercer',  fireRate: 111, bulletVelocity: 250, piercing: 2, pellets: 1, spreadVx: 0 },
     rapid:    { name: 'Rapid',    fireRate: 80,  bulletVelocity: 280, piercing: 1, pellets: 1, spreadVx: 0 },
     // Supply-crate power-ups (temporary, POWER_TIME seconds). pellets/spreadVx: shots per trigger / sideways px/s between them
@@ -163,7 +163,8 @@
   var MAX_WAVE = 300;            // hard cap on red wall size (two walls always fit the 1000 pool)
   var NEG_RECHARGE = 0.5;        // '-' gates regain n * this per second
   var BOSS_W = W * 0.4 * ES, BOSS_H = 56 * ES, BOSS_STRAFE = 22;   // mothership: 40% of screen width, slow drift (px/s)
-  var SHOTS_PER_SEC = 9;                  // must match FIRE_RATE; used by the HP formulas
+  var SHOTS_PER_SEC = 20;                 // must match FIRE_RATE; used by the HP formulas
+  var POUR_N = 500, POUR_GROW = 0.08, POUR_RATE = 45, POUR_RATE_GROW = 1.5, POUR_MAX_LEVEL = 8, POUR_SPEED0 = 0.4;   // Phase 16: Tier 1 (L1-8) is one sustained pour of reds
   var BASE_TTK = 35, BOSS_TTK = 45;       // target perfect-stream seconds to clear
   var HP_PER_TIER = 0.02;                 // +2% base HP per tier
   var MTM_EFF = 1.05, MTM_EFF_EXP = 0.3;                    // measured share of the theoretical multiplier a real stream achieves
@@ -269,7 +270,9 @@
       bossHP: 0,
       redInterval: Math.max(2.5, 5.0 * Math.pow(0.98, tf - 1)),
       waveMin: wMin, waveMax: Math.max(wMin, wMax),
-      redSpeedMul: 1 + Math.min(0.25, (tf - 1) * 0.005),   // speed growth is capped; density and shields carry late game
+      pour: (n <= POUR_MAX_LEVEL && !isBoss) ? Math.round(POUR_N * (1 + POUR_GROW * (n - 1))) : 0,          // total reds in the single sustained wave
+      pourRate: POUR_RATE + POUR_RATE_GROW * (n - 1),                                                      // reds/s leaving the pipes (all columns together)
+      redSpeedMul: (1 + Math.min(0.25, (tf - 1) * 0.005)) * ((n <= POUR_MAX_LEVEL && !isBoss) ? POUR_SPEED0 + (1 - POUR_SPEED0) * (n - 1) / (POUR_MAX_LEVEL - 1) : 1),   // speed growth is capped; density and shields carry late game
       mixTank: tier >= 2 ? Math.min(0.45, 0.2 + 0.03 * (tier - 2)) : 0, mixSprinter: tier >= 4 ? Math.min(0.3, 0.2 + 0.02 * (tier - 4)) : 0,
       terrain: [],   // Bestiary unlocks: Tier 2 Tanks, Tier 4 Sprinters
       gates: [], bumpers: [], holes: []
@@ -314,7 +317,7 @@
     L.doors = []; L.terrainEff = 1; L.barrCol = [];
     // Phase 12: L1-2 spawn only gray blocks. Blue barricades (rewards) never share a column and each one carries a
     // Threat Budget: a dense red wave in an ADJACENT column, sized by the barricade's hit value.
-    var nbar = n <= 2 ? n : Math.min(MAX_TERRAIN, 2 + (((n - 3) / 4) | 0)), bk, blueUsed = [false, false, false, false];
+    var nbar = n <= 2 ? n - 1 : Math.min(MAX_TERRAIN, 2 + (((n - 3) / 4) | 0)), bk, blueUsed = [false, false, false, false];
     L.threats = [];
     for (bk = 0; bk < nbar; bk++) {
       var rt = rnd(), typ = n <= 2 ? 0 : (rt < 0.25 ? 0 : (rt < 0.65 ? 1 : 2)), freeC = [];
@@ -323,6 +326,7 @@
       var gTop = 1e9; for (j = 0; j < defs.length; j++) if (defs[j][7] === c && defs[j][1] < gTop) gTop = defs[j][1];
       var yMin = FIELD_TOP + 24, yMax = Math.min(360, gTop - GATE_H / 2 - 36);
       if (yMax < yMin) continue;
+      if (n <= POUR_MAX_LEVEL) yMin = Math.max(yMin, yMax - 110);   // Phase 16: Tier-1 dams sit low in the available space, so a pour never stacks into one giant burst
       var by = yMin + rnd() * (yMax - yMin), clash = false;
       for (j = 0; j < L.terrain.length; j++) if (L.barrCol[j] === c && Math.abs(L.terrain[j][1] - by) < 46) clash = true;
       if (clash) continue;
@@ -611,7 +615,7 @@
   var cannonHP = CANNON_MAX_HP;
   var mixTank = 0, mixSprinter = 0;
   var waveQueue = 0, wq = new Int16Array(MAX_COLS), pa = new Float32Array(MAX_COLS), waveCursor = 0;   // reds leave a pipe at the top of a column (or the boss) as a stream
-  var sandbox = false, sandAcc = 0;
+  var sandbox = false, sandAcc = 0, pipeRate = PIPE_RATE;
   var tq = new Int16Array(MAX_COLS), ta = new Float32Array(MAX_COLS), threatsOn = true, threatClock = 0;   // threat-budget waves queued per column
   var crateActive = false, crateX = 0, crateY = 0, crateHP = 0, crateTimer = 17;
   var pillX = new Float32Array(PILL_MAX), pillY = new Float32Array(PILL_MAX), pillT = new Uint8Array(PILL_MAX), pillCount = 0;
@@ -723,6 +727,8 @@
     fireAcc = 0; fireCount = 0;
     redTimer = 2;                                        // short grace period before the first wave / the boss
     waveQueue = 0; waveCursor = 0; for (var wc = 0; wc < MAX_COLS; wc++) { wq[wc] = 0; pa[wc] = 0; }
+    pipeRate = PIPE_RATE;
+    if (L.pour) { pipeRate = L.pourRate / L.cols; redTimer = 1e9; queueWave(L.pour); }   // Phase 16: one sustained pour, no further random waves
     threatClock = 0;
     for (var tc2 = 0; tc2 < MAX_COLS; tc2++) { tq[tc2] = 0; ta[tc2] = 0; }
     if (threatsOn) for (var th = 0; th < L.threats.length; th++) if (L.threats[th][0] < colN) tq[L.threats[th][0]] += L.threats[th][1];
@@ -849,7 +855,7 @@
     }
     for (c = 0; c < colN; c++) {
       if (wq[c] <= 0) { pa[c] = 0; continue; }
-      pa[c] += dt * PIPE_RATE;
+      pa[c] += dt * pipeRate;
       while (pa[c] >= 1 && wq[c] > 0) {
         var half = (colX1[c] - colX0[c]) / 2 - RED_R - 1;
         if (!emitRed(c, (colX0[c] + colX1[c]) / 2, half < 24 ? half : 24)) { pa[c] = 0; break; }
@@ -962,7 +968,7 @@
         fireAcc -= 1;
         if ((fireCount++ % 3) === 0) sfxPop();       // every 3rd shot to keep audio light
         for (var pl = 0; pl < weapon.pellets; pl++) {
-          spawnMob(muzzleX, CANNON_Y - MUZZLE_OFF, (pl - (weapon.pellets - 1) / 2) * weapon.spreadVx + (Math.random() - 0.5) * 2 * SPREAD, -MOB_SPEED, 0);
+          spawnMob(muzzleX, CANNON_Y - MUZZLE_OFF, (pl - (weapon.pellets - 1) / 2) * weapon.spreadVx + (Math.random() - 0.5) * 2 * (weapon.spread || SPREAD), -MOB_SPEED, 0);
         }
       }
     } else if (fireAcc > 1) {
@@ -1658,6 +1664,7 @@
       setTerrain: setTerrain, setColumns: setColumns, openField: function () { colN = 1; colX0[0] = 10; colX1[0] = W - 10; AX0 = 10; AX1 = W - 10; doorCount = 0; },
       colOf: colOf, columnCount: columnCount, colSpan: colSpan, DIV_W: DIV_W, DOOR_H: DOOR_H, COL_W: COL_W, crushHit: crushHit, setDoors: function (l) { doorCount = l.length; for (var q = 0; q < doorCount; q++) { doorDiv[q] = l[q][0]; doorY0[q] = l[q][1]; doorY1[q] = l[q][2]; doorHP[q] = doorMax[q] = l[q][3]; doorOpen[q] = 0; } }, spawnZone: function (c, y) { zoneCol[zoneCount] = c; zoneY[zoneCount] = y; zoneT[zoneCount] = ZONE_TIME; zoneCount++; }, ZONE_TIME: ZONE_TIME, redGravity: RED_GRAV, spawnCrate: spawnCrate, spawnPill: function (x, y, t) { spawnPill(x, y); if (t !== undefined) pillT[pillCount - 1] = t; },
       setCrateTimer: function (t) { crateTimer = t; }, queueWave: queueWave,
+      clearReds: function () { redCount = 0; waveQueue = 0; for (var q = 0; q < MAX_COLS; q++) { wq[q] = 0; pa[q] = 0; } },
       // Dry-run of one blue launched at x0 (terrain only): returns {x: [...], t: [...]} where it crosses each y in ys (bots use this to aim round terrain)
       BOSS_PIPE_RATE: BOSS_PIPE_RATE, setPaused: setPaused, isPaused: function () { return paused; }, tuneBoss: function (w, i) { BOSS_WAVE_K = w; BOSS_INT_K = i; }, PIPE_RATE: PIPE_RATE, bossParams: function () { return { wave: bossWave, interval: bossInterval }; },
       render: render, TRACK_Y: TRACK_Y, CANNON_Y: CANNON_Y, TRACK_H: TRACK_H, ES: ES, GATE_H: GATE_H, BOSS_W: BOSS_W, BOSS_H: BOSS_H, CRATE_R: CRATE_R, PILL_R: PILL_R,

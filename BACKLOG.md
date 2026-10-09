@@ -107,3 +107,8 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done. Suggested model: **Sonnet** =
 | P15-2 | Soft collision resolving | [x] | Pro |
 | P15-3 | Spawn jitter + terminal-speed spawns | [x] | Sonnet |
 | P15-4 | Re-tune door crush/pile balance + bot sims on soft physics | [ ] | Pro |
+| P16-1 | Soft collisions + jitter global (already in shared red solver) | [x] | Pro |
+| P16-2 | L1 sustained pour (500 reds @ 45/s) | [x] | Pro |
+| P16-3 | Lawnmower weapon: 20 shots/s, cleave 3, 110px/s cone | [x] | Pro |
+| P16-4 | Tier 1 (L1-8) scaling from the L1 baseline + pour-sim | [x] | Pro |
+| P16-5 | Rebalance L9+ on the 20 shots/s weapon (bot-sim/boss-sim/soak not re-run) | [ ] | Pro |

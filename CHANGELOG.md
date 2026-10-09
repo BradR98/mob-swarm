@@ -160,3 +160,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Phase 15.1
 - fix: Level 99 sandbox cannon now fires (the sandbox had wrongly disabled player fire). Version v15.1 · c14.
+
+## Phase 16 - Level 1 baseline & Tier 1 scaling (v16 / cache c15)
+- Soft collisions (RED_SOFT 0.2, RED_ITERS 3) and spawn jitter were already in the shared red solver / emitRed, so they apply to every level.
+- L1-8 open with ONE sustained pour instead of random waves: L1 = 500 reds @ 45/s (one column, no gates, no barricade); +8% reds and +1.5/s per level (L8 = 780 @ 55.5/s). Reds fall slower early (x0.4 at L1 -> x1.0 at L8) so the river is dense. L9+ keep the old wave system.
+- Lawnmower weapon (Armory.standard): 111ms -> 50ms (9 -> 20 shots/s), piercing 1 -> 3 (a blue cleaves 3 red HP), 110px/s random sideways spray (a held trigger sweeps the whole lane). SHOTS_PER_SEC 9 -> 20 so base HP formulas keep the same perfect-stream time-to-kill.
+- Tier 1 layout: L2 gets one destructible gray barricade, 2nd column at L3 (3rd at L6), barricades sit low in their free band.
+- test/pour-sim.js: perfect-aim bot over L1-8. New debug hook clearReds. Headless: 200 PASS / 0 FAIL; mechanic tests run on a legacy 1.0x weapon, Phase 16 tests assert the lawnmower.
