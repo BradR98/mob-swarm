@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Install button
+- A small "Install app" pill appears at the bottom only when the browser fires `beforeinstallprompt` (installable and not installed); the Chrome menu item can report a stale "already installed". Version label `v18 · c20`, cache `mob-swarm-v20`.
+
 ### PWA install id fix
 - The manifest `id` was `./index.html`. Browsers resolve `id` against the ORIGIN, so it became `https://bradr98.github.io/index.html`, shared with other games using that id; Chrome then reported "already installed". The id is now `/mob-swarm/` (unique). Version label `v18 · c19`, cache `mob-swarm-v19`. Gameplay is unchanged.
 
