@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### PWA install id fix
+- The manifest `id` was `./index.html`. Browsers resolve `id` against the ORIGIN, so it became `https://bradr98.github.io/index.html`, shared with other games using that id; Chrome then reported "already installed". The id is now `/mob-swarm/` (unique). Version label `v18 · c19`, cache `mob-swarm-v19`. Gameplay is unchanged.
+
 ### Phase 15 - soft collisions and the L99 physics sandbox
 - **Soft collisions:** the rigid separation (90% of an overlap per pass) is replaced by over-relaxed "soft resolving": ~20% of a light overlap per frame (3 passes of RED_SOFT/3), ramping up only for deep overlaps (> 55% of a body) so a pile compresses and flows like mud but cannot collapse into a blob. Sideways velocity also bleeds off faster (viscous).
 - **Spawn jitter:** every emitted red gets +/-5px X and Y jitter, and spawns at its terminal fall speed so a 30/s stream is spaced ~6px instead of stacking on one pixel (the "shotgun blast").
