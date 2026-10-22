@@ -101,7 +101,7 @@
       <button id="restart" type="button">Next Level</button>
       <div id="warpRow"><label for="lvlInput">Level</label><input id="lvlInput" type="number" inputmode="numeric" min="1" max="9999" value="1"><button id="warp" type="button">Warp</button></div>
     </div>
-    <span id="ver">v18 · c20</span>
+    <span id="ver">v19 · c21</span><!-- BUILD LABEL: v19 · c21 == CACHE_NAME mob-swarm-v21 in sw.js; bump both together -->
     <button id="pause" type="button" aria-label="Pause game" title="Pause">&#10074;&#10074;</button>
     <button id="mute" type="button" aria-label="Mute audio" title="Mute / unmute">&#128266;</button>
   </div>
@@ -137,8 +137,9 @@
 
   // ---------- The Bestiary: red mob dictionary ----------
   //   speed / radius are multipliers of the base red; hp in blue-damage points
-  var RED_SPEED_BASE = 187.5;     // px/s downward (red); scaled per tier
-  var RED_SPEED_CAP = 280;        // hard cap on any red's descent speed: late game scales density and shields, never speed
+  var RED_SPEED_BASE = 122;       // px/s downward (red); scaled per tier. Funnel tuning: -35% (was 187.5)
+  var RED_SPEED_CAP = 260;        // hard cap (raised from 182 so the per-level speed ramp has headroom; was 280 originally)
+  var RED_SPEED_PER_LEVEL = 6;    // funnel tuning: +6 px/s of descent per level on top of the slowed base on any red's descent speed: late game scales density and shields, never speed
   var RedMobTypes = {
     Basic:    { id: 0, speed: 1.0, radius: 1.0, hp: 1, color: '#ff4d5e', wound: '#ff9a3c' },
     Tank:     { id: 1, speed: 0.5, radius: 1.5, hp: 3, color: '#8a1020', wound: '#c8404f' },
@@ -179,10 +180,16 @@
   var POOL_RATE_CAP = 250;                // blue hits/s the 1500-mob pool can sustain (lifetime ~1.8s, with headroom)
   var TIER_SIZE = 5;
   var TERRAIN_EFF = 0.93;                 // throughput kept per terrain piece (measured)
-  var THREAT_K = 1.0, THREAT_MIN = 8, THREAT_MAX = 24, THREAT_DELAY = 10, THREAT_RATE = 14;   // threat budget: red wave size = THREAT_K x the blue barricade's hits
+  var BASE_HP_SCALE = 0.5;                // TTK baseline: the 1x starter cannon now clears the HQ as fast as the 2x did (L1 base 250 -> 125)
+  var MOUTH_HALF = 44;                    // spawn mouth half-width cap (was 24): a wider mouth restores the throughput that back-pressure costs
+  var BARR_RUNWAY = 140;                  // min free height between the spawn mouth and a barricade top
+  var SPAWN_DENSITY = 1.0, DENSITY_STEP = 1.5, DENSITY_STEP_LEVEL = 3, levelDensity = 1;
+  function densityFor(n) { var m = effLevel(n), lo = Math.floor(m), f = m - lo, a = densityTier(lo); return f ? a + (densityTier(lo + 1) - a) * f : a; }   // continuous through the L5 -> L9 ramp (L9 = 2.2x)
+  function densityTier(n) { return n >= 10 ? 3.5 : (n >= 6 ? 2.2 : (n >= 4 ? 1.8 : (n >= 3 ? 1.5 : 1))); }   // tiers on the remapped level: L1-2 1.0x, L3 1.5x, L4-5 1.8x, L6+ 2.2x, L10+ 3.5x
+  // density step: L1-3 run at 1.0x; every level above 3 spawns 1.5x (wave interval / 1.5; pipe and pour rates x1.5)
   var MAX_TERRAIN = 12, SLIDE_MIN = 70, RED_SLIDE = 90;   // min tangential slide speed so mobs never stall on a flat face
   var SPAWN_JITTER = 5, SANDBOX_LEVEL = 99, SANDBOX_RATE = 30, SANDBOX_W = 320;   // Phase 15 physics sandbox (L99)
-  var PIPE_RATE = 28;                     // reds/s leaving the pipe (spacing ~ 1 body at base speed)
+  var PIPE_RATE = 28 * SPAWN_DENSITY;                     // reds/s leaving the pipe (spacing ~ 1 body at base speed)
   var CRATE_R = 16 * ES, CRATE_HP = 30, CRATE_SPEED = 16, CRATE_MIN = 15, CRATE_MAX = 20;   // supply crate
   var PILL_MAX = 4, PILL_SPEED = 100, POWER_TIME = 8, PILL_R = 10 * ES;
   var BOSS_WAVE_K = 0.4, BOSS_INT_K = 2;
@@ -206,24 +213,16 @@
 
   var FIELD_TOP = 128, LANE_BOTTOM = 494;                      // terrain lives between the base and the muzzle (shots spawn at 504)
   var GATE_SLOTS = [354, 316, 278, 240];                       // gate rows inside a column, bottom to top (38px apart)
-  // ---------- Phase 11: discrete columns (1-4), dividers with trapdoors ----------
-  var COL_W = [0, 120, 150, 104, 80], DIV_W = 8, MAX_COLS = 4, MAX_DOORS = 3, DOOR_H = 56;
-  function columnCount(n) { return n <= 2 ? 1 : (n <= 5 ? 2 : (n <= 9 ? 3 : 4)); }   // Phase 12: L1-2 / 3-5 / 6-9 / 10+
+  // ---------- Single chute geometry (was: discrete columns with dividers and trapdoors) ----------
+  // SINGLE CHUTE: the board is exactly ONE vertical pipe (no lanes, dividers, doors or lateral spill). The rest of the canvas is dead space.
+  var CHUTE_W = 96, MAX_COLS = 1;
+  var COL_W = [0, CHUTE_W];
+  function columnCount(n) { return 1; }
   function colSpan(nc, c) {                                     // [x0, x1] of column c when nc columns are active (centred)
-    var cw = COL_W[nc], tot = nc * cw + (nc - 1) * DIV_W, ax0 = (W - tot) / 2, x0 = ax0 + c * (cw + DIV_W);
+    var cw = COL_W[nc], x0 = (W - cw) / 2;
     return [x0, x0 + cw];
   }
   var colN = 1, colX0 = new Float32Array(MAX_COLS), colX1 = new Float32Array(MAX_COLS), AX0 = 0, AX1 = W;
-  // Phase 14: pressure doors embedded in the lane dividers (solid until their HP is crushed to 0)
-  var CRUSH_MIN_VX = 45, CRUSH_CD = 0.3, BREACH_V = 150;   // lateral push (px/s) needed to hurt a door; seconds between hits per mob; spill speed on breach
-  var doorCount = 0, doorDiv = new Int8Array(MAX_DOORS), doorY0 = new Float32Array(MAX_DOORS), doorY1 = new Float32Array(MAX_DOORS);
-  var doorHP = new Int16Array(MAX_DOORS), doorMax = new Int16Array(MAX_DOORS), doorOpen = new Uint8Array(MAX_DOORS), doorFlash = new Float32Array(MAX_DOORS);
-  // Phase 13: x2 multiplier zones left behind by shattered Blue Barricades
-  var ZONE_TIME = 10, ZONE_H = 30, MAX_ZONES = 4, ZONE_BIT = 64;
-  var zoneFlash = 0, zoneCount = 0, zoneCol = new Int8Array(MAX_ZONES), zoneY = new Float32Array(MAX_ZONES), zoneT = new Float32Array(MAX_ZONES);
-  // Crush-angle filter: a red only damages a pressure door when it hits with heavy LATERAL force: |vx| is high and the
-  // collision vector is more than 45 degrees off the vertical (|vx| >= |vy|). Free-falling mobs deal 0.
-  function crushHit(vx, vy) { vx = vx < 0 ? -vx : vx; vy = vy < 0 ? -vy : vy; return vx >= CRUSH_MIN_VX && vx >= vy; }
   function setColumns(nc) {
     colN = nc;
     for (var c = 0; c < nc; c++) { var sp = colSpan(nc, c); colX0[c] = sp[0]; colX1[c] = sp[1]; }
@@ -234,8 +233,45 @@
     for (var c = 0; c < colN; c++) { var d = x - (colX0[c] + colX1[c]) * 0.5; if (d < 0) d = -d; if (d < bd) { bd = d; best = c; } }
     return best;
   }            // y centers, bottom to top (38px apart, never overlap)
-  var LOW_POOL = [['x', 2, 'x2'], ['+', 2, '+2']];       // wide, near the cannon
-  var HIGH_POOL = [['x', 3, 'x3'], ['+', 10, '+10']];    // narrow, high up near the enemy
+  // Dynamic RNG gate drops (replaces the static pools: L3 = x2, +2 / high = x3, +10). Each gate rolls its value inside a window whose floor and
+  // ceiling both rise with the level (L4: x2-x4, L7: x3-x6, L10: x4-x8). 'L' gates (wide, low) favour the bottom of the window, 'H' gates (narrow,
+  // high) the top. Values are "messy" fractions (x2.2, +1.5); applyGate rounds them probabilistically so the AVERAGE clone count is exact.
+  // Crushed gate ceiling: the single chute can't take big multipliers. x windows by level (linear between anchors, clamped): L4 x1.2-1.8, L7 x1.5-2.4, L10+ x2.0-3.0.
+  // Live-tuning config (driven by the #debug-harness panel). Initial values mirror the Level 6 math; reset() re-syncs them to every level that loads.
+  var TUNING = window.TUNING = { chuteWidth: 84, mobDensity: 2.2, mobSpeed: 140, mobRedHP: 1, gateConcurrency: 2, gateXRange: 1.8, playerDmg: 1.0, playerBullets: 1 };
+  var tunApply = false;      // true only while the harness "Restart Level" button rebuilds the level: level-specific TUNING values then override the level math
+  var tunGateConc = 99;      // max active gates (captured at level start)
+  var GATE_WIN = [[4, 1.2, 1.8], [7, 1.5, 2.4], [10, 2.0, 3.0]];
+  function gateWin(n) {
+    var w = gateWinBase(n);
+    if (tunApply) { var tr = TUNING.gateXRange / w[1]; return [Math.max(1.1, w[0] * tr), TUNING.gateXRange]; }   // harness: ceiling = slider, floor keeps the level's proportion
+    return w;
+  }
+  // LEVEL 9 RESHAPE: the old Level 6 tuning (user-vetted via the harness) now lives at Level 9. Levels 1-5 are untouched, 6-8 ramp from L5 to the new L9,
+  // and every level past 9 continues the old curve three levels later (L10 plays like old L7, L13 like old L10). `effLevel` is that remap.
+  var L9_CHUTE = 84, L9_GATE_K = 1.8 / 2.2;   // L9 chute width; L9 gate ceiling x1.8 (old L6 window said x2.2)
+  function effLevel(n) { return n <= 5 ? n : (n <= 9 ? 5 + (n - 5) / 4 : n - 3); }
+  function rampK(n) { return n <= 5 ? 0 : (n >= 9 ? 1 : (n - 5) / 4); }                       // 0 at L5 -> 1 at L9
+  function chuteFor(n) { return Math.round(CHUTE_W + (L9_CHUTE - CHUTE_W) * rampK(n)); }       // 96 -> 84
+  function gateWinBase(n) {
+    var k = 1 + (L9_GATE_K - 1) * rampK(n), w = gateWinRaw(effLevel(n));
+    return [w[0] * k, w[1] * k];
+  }
+  function gateWinRaw(n) {
+    if (n <= GATE_WIN[0][0]) return [GATE_WIN[0][1], GATE_WIN[0][2]];
+    for (var q = 1; q < GATE_WIN.length; q++) if (n <= GATE_WIN[q][0]) { var p0 = GATE_WIN[q - 1], p1 = GATE_WIN[q], t = (n - p0[0]) / (p1[0] - p0[0]); return [p0[1] + (p1[1] - p0[1]) * t, p0[2] + (p1[2] - p0[2]) * t]; }
+    return [GATE_WIN[GATE_WIN.length - 1][1], GATE_WIN[GATE_WIN.length - 1][2]];
+  }
+  function fmtGate(v) { var t = Math.round(v * 10) / 10; return (t % 1 === 0) ? String(t) : t.toFixed(1); }
+  function rollGate(kind, n, rnd) {
+    var isX = rnd() < 0.5, lo, hi, a;
+    var w = gateWin(n); if (isX) { lo = w[0]; hi = w[1]; } else { lo = w[0] - 1; hi = w[1] - 1; }   // '+n' makes n+1 mobs, so its window is the x window minus 1: the effective multiplier never passes the cap
+    a = rnd(); if (kind === 'L') a = a * a * 0.85; else a = 0.35 + 0.65 * Math.sqrt(a);   // skew: lows cluster near the floor, highs near the ceiling
+    var v = Math.round((lo + (hi - lo) * a) * 10) / 10;
+    if (v === Math.round(v) && rnd() < 0.7) v += rnd() < 0.5 ? 0.1 : -0.1;                  // keep drops "organic": mostly non-integer
+    var vmin = isX ? 1.1 : 0.2, wlo = Math.round(lo * 10) / 10, whi = Math.round(hi * 10) / 10; if (v < wlo) v = wlo; if (v > whi) v = whi; if (v < vmin) v = vmin;   // hard clamp: the jitter can never leave the window
+    return isX ? ['x', v, 'x' + fmtGate(v)] : ['+', v, '+' + fmtGate(v)];
+  }
   function tierOf(n) { return Math.ceil(n / TIER_SIZE); }
   // Throughput (blue hits/s) a perfect stream is expected to sustain: efficiency-scaled MTM, capped by the pool
   // Measured (bot-sim) efficiency is not constant: it falls as MTM grows (gates are missed, clones spread out, the
@@ -258,16 +294,17 @@
   // gate def: [width, y, type, n, label, startRight, speed]
   //   types: 'x' multiply, '+' add, '-' tax (destroys up to n, recharges), '/' halve (destroys every 2nd)
   function generateLevel(n) {
-    COL_W[1] = n === SANDBOX_LEVEL ? SANDBOX_W : 120;
+    COL_W[1] = n === SANDBOX_LEVEL ? SANDBOX_W : chuteFor(n);
     if (n === SANDBOX_LEVEL) {                       // Phase 15: glass box. One wide column, an indestructible plug at the bottom, nothing else.
       var sx0 = (W - SANDBOX_W) / 2;
       return { n: n, tier: tierOf(n), baseHP: 1e6, mtm: 1, throughput: 0, isBoss: false, bossHP: 0, redInterval: 99, waveMin: 8, waveMax: 12, redSpeedMul: 1,
                mixTank: 0, mixSprinter: 0, terrain: [[sx0 + SANDBOX_W / 2, 470, SANDBOX_W / 2, 14, 0, 1, 255, 0]], gates: [], bumpers: [], holes: [],
-               cols: 1, doors: [], threats: [], barrCol: [0], terrainEff: 1, sandbox: true };
+               cols: 1, barrCol: [0], terrainEff: 1, sandbox: true };
     }
     var rnd = rng32(n * 7919 + 12345);
     var isBoss = (n % 10) === 0;
-    var tier = tierOf(n), tf = (tier - 1) * TIER_SIZE + 1;     // tier constants are those of the tier's first level
+    var m = effLevel(n);                                       // difficulty level (see effLevel); n stays the level number / seed / boss test
+    var tier = tierOf(m), tf = (tier - 1) * TIER_SIZE + 1;     // tier constants are those of the tier's first level
     var wMin = Math.min(MAX_WAVE, 8 + (tf - 1));
     var wMax = Math.min(MAX_WAVE, 12 + 2 * (tf - 1));
     var L = {
@@ -277,10 +314,10 @@
       bossHP: 0,
       redInterval: Math.max(2.5, 5.0 * Math.pow(0.98, tf - 1)),
       waveMin: wMin, waveMax: Math.max(wMin, wMax),
-      pour: (n <= POUR_MAX_LEVEL && !isBoss) ? POUR_N : 0,          // total reds in the single sustained wave
-      pourRate: POUR_RATE * Math.pow(1 + ATTRITION, n - 1),   // Phase 17 attrition: the pour compounds +2%/level against a flat per-level weapon curve
+      pour: (m <= POUR_MAX_LEVEL && !isBoss) ? POUR_N : 0,          // total reds in the single sustained wave
+      pourRate: POUR_RATE * Math.pow(1 + ATTRITION, m - 1),   // Phase 17 attrition: the pour compounds +2%/level against a flat per-level weapon curve
       baseHit: 1,                                                      // reds/s leaving the pipes (all columns together)
-      redSpeedMul: (1 + Math.min(0.25, (tf - 1) * 0.005)) * ((n <= POUR_MAX_LEVEL && !isBoss) ? POUR_SPEED0 + (1 - POUR_SPEED0) * (n - 1) / (POUR_MAX_LEVEL - 1) : 1),   // speed growth is capped; density and shields carry late game
+      redSpeedMul: (1 + Math.min(0.25, (tf - 1) * 0.005)) * ((m <= POUR_MAX_LEVEL && !isBoss) ? POUR_SPEED0 + (1 - POUR_SPEED0) * (m - 1) / (POUR_MAX_LEVEL - 1) : 1),   // speed growth is capped; density and shields carry late game
       mixTank: tier >= 2 ? Math.min(0.45, 0.2 + 0.03 * (tier - 2)) : 0, mixSprinter: tier >= 4 ? Math.min(0.3, 0.2 + 0.02 * (tier - 4)) : 0,
       terrain: [],   // Bestiary unlocks: Tier 2 Tanks, Tier 4 Sprinters
       gates: [], bumpers: [], holes: []
@@ -297,7 +334,13 @@
       if (nc <= 2 && n > 2 && rnd() < 0.3) sq.unshift('L');
       seqs.push(sq); total += sq.length;
     }
-    while (total > MAX_GATES) {                         // gate bits are limited: trim extras from the longest column
+    if (n >= 7 && total < 2 && nc > 0) { seqs[0].push(seqs[0].indexOf('H') < 0 ? 'H' : 'L'); total++; }   // L7+: at least two gates (gate concurrency 2)
+    if (tunApply) {                                      // harness restart: guarantee at least `gateConcurrency` gates exist so the concurrency slider has something to activate
+      var want = Math.min(GATE_SLOTS.length, MAX_GATES, Math.round(TUNING.gateConcurrency)), pc = 0;
+      while (total < want && nc > 0) { seqs[0].push(pc++ & 1 ? 'H' : 'L'); total++; }
+    }
+    var maxG = (n >= 7 && !tunApply) ? 2 : MAX_GATES;                  // L7+: exactly two gates on the field (vetted gate concurrency 2)
+    while (total > maxG) {                         // gate bits are limited: trim extras from the longest column
       var li = 0; for (c = 1; c < nc; c++) if (seqs[c].length >= seqs[li].length) li = c;
       var s2 = seqs[li], k2 = s2.indexOf('L') !== s2.lastIndexOf('L') ? s2.lastIndexOf('L') : (s2.indexOf('N') >= 0 ? s2.indexOf('N') : s2.indexOf('H'));
       s2.splice(k2, 1); total--;
@@ -306,61 +349,42 @@
       var hasX = false, first = defs.length;
       for (i = 0; i < seqs[c].length; i++) {
         var speed = Math.min(240, 55 + n * 2 + rnd() * 20) * 0.6, kind = seqs[c][i], d, w;
-        if (kind === 'L') { d = LOW_POOL[(rnd() * 2) | 0]; w = Math.round(cw * (0.72 + rnd() * 0.12)); defs.push([w, GATE_SLOTS[i], d[0], d[1], d[2], rnd() < 0.5, speed, c]); }
-        else if (kind === 'H') { d = HIGH_POOL[(rnd() * 2) | 0]; w = Math.round(cw * (0.38 + rnd() * 0.1)); defs.push([w, GATE_SLOTS[i], d[0], d[1], d[2], rnd() < 0.5, speed, c]); }
+        if (kind === 'L') { d = rollGate('L', n, rnd); w = Math.round(cw * (0.72 + rnd() * 0.12)); defs.push([w, GATE_SLOTS[i], d[0], d[1], d[2], rnd() < 0.5, speed, c]); }
+        else if (kind === 'H') { d = rollGate('H', n, rnd); w = Math.round(cw * (0.38 + rnd() * 0.1)); defs.push([w, GATE_SLOTS[i], d[0], d[1], d[2], rnd() < 0.5, speed, c]); }
         else { d = rnd() < 0.5 ? ['-', 10, '-10'] : ['/', 2, '/2']; w = Math.round(cw * 0.78); defs.push([w, GATE_SLOTS[i], d[0], d[1], d[2], false, speed * 1.05, c]); }
         if (d[0] === 'x') hasX = true;
       }
-      if (!hasX && seqs[c].length) { var fx = defs[first], hi = fx[0] < 0.6 * cw; fx[2] = 'x'; fx[3] = hi ? 3 : 2; fx[4] = hi ? 'x3' : 'x2'; }   // every column has a multiplier
+      if (!hasX && seqs[c].length) { var fx = defs[first], hi = fx[0] < 0.6 * cw; fx[2] = 'x'; fx[3] = Math.round(gateWin(n)[hi ? 1 : 0] * 10) / 10; fx[4] = 'x' + fmtGate(fx[3]); }   // every column has a multiplier
       for (i = 0; i < seqs[c].length; i++) if (seqs[c][i] === 'N') defs[first + i][5] = !defs[first + i + 1][5];   // negative slides opposite the high it guards
     }
     L.gates = defs;
     L.mtm = calculateLevelMTM(defs);
 
-    // --- Phase 11: trapdoors (gaps in the lane dividers, staggered in height) and destructible barricades ---
+    // --- destructible barricades (single chute: each one plugs the whole pipe) ---
     function obbD2(pc, x, y) {
       var dx = Math.abs(x - pc[0]) - pc[2], dy = Math.abs(y - pc[1]) - pc[3];
       dx = dx > 0 ? dx : 0; dy = dy > 0 ? dy : 0; return dx * dx + dy * dy;
     }
-    L.doors = []; L.terrainEff = 1; L.barrCol = [];
+    L.terrainEff = 1; L.barrCol = [];
     // Phase 12: L1-2 spawn only gray blocks. Blue barricades (rewards) never share a column and each one carries a
     // Threat Budget: a dense red wave in an ADJACENT column, sized by the barricade's hit value.
-    var nbar = n <= 2 ? n - 1 : Math.min(MAX_TERRAIN, 2 + (((n - 3) / 4) | 0)), bk, blueUsed = [false, false, false, false];
-    L.threats = [];
+    var nbar = n <= 2 ? 0 : Math.min(Math.ceil(MAX_TERRAIN / 2), 1 + (((m - 3) / 8) | 0)), bk;
     for (bk = 0; bk < nbar; bk++) {
-      var rt = rnd(), typ = n <= 2 ? 0 : (rt < 0.25 ? 0 : (rt < 0.65 ? 1 : 2)), freeC = [];
-      if (typ === 1) { for (j = 0; j < nc; j++) if (!blueUsed[j]) freeC.push(j); if (nc < 2 || !freeC.length || isBoss) typ = 0; }   // boss levels: the boss is the threat, no reward blocks
-      c = typ === 1 ? freeC[(rnd() * freeC.length) | 0] : (rnd() * nc) | 0;
+      var rt = rnd(), typ = n <= 2 ? 0 : (rt < 0.25 ? 0 : (rt < 0.65 ? 1 : 2));
+      if (typ === 1) typ = 0;                  // single chute: blue reward barricades are gone
+      c = 0;
       var gTop = 1e9; for (j = 0; j < defs.length; j++) if (defs[j][7] === c && defs[j][1] < gTop) gTop = defs[j][1];
       var yMin = FIELD_TOP + 24, yMax = Math.min(360, gTop - GATE_H / 2 - 36);
       if (yMax < yMin) continue;
-      if (n <= POUR_MAX_LEVEL) yMin = Math.max(yMin, yMax - 110);   // Phase 16: Tier-1 dams sit low in the available space, so a pour never stacks into one giant burst
+      yMin = Math.max(yMin, BASE_BOTTOM + BARR_RUNWAY + 12);   // runway floor: barricade top >= BARR_RUNWAY px under the spawn mouth so a real stack can form
+      if (yMax < yMin) continue;                               // gates leave no room: skip this barricade
+      if (m <= POUR_MAX_LEVEL) yMin = Math.max(yMin, yMax - 110);   // Phase 16: Tier-1 dams sit low in the available space, so a pour never stacks into one giant burst
       var by = yMin + rnd() * (yMax - yMin), clash = false;
-      for (j = 0; j < L.terrain.length; j++) if (L.barrCol[j] === c && Math.abs(L.terrain[j][1] - by) < 46) clash = true;
+      for (j = 0; j < L.terrain.length; j++) if ((L.barrCol[j] === c && Math.abs(L.terrain[j][1] - by) < 46) || Math.abs(L.terrain[j][1] - by) < 90) clash = true;   // funnel tuning: staggered heights, never a flat row across the lanes
       if (clash) continue;
-      var bx0 = colSpan(nc, c)[0], hits = Math.min(60, Math.round(10 + n * 0.5));
+      var bx0 = colSpan(nc, c)[0], hits = Math.min(60, Math.round(10 + m * 0.5));
       L.terrain.push([bx0 + cw / 2, by, cw / 2, 12, 0, 1, typ, hits]);   // Phase 13: a barricade plugs its whole column (a dam)
       L.barrCol.push(c);
-      if (typ === 1) {
-        blueUsed[c] = true;
-        var adj = c === 0 ? 1 : (c === nc - 1 ? nc - 2 : (rnd() < 0.5 ? c - 1 : c + 1));
-        L.threats.push([adj, Math.max(THREAT_MIN, Math.min(THREAT_MAX, Math.round(hits * THREAT_K))), c, hits]);
-      }
-    }
-
-    // --- Phase 14: pressure doors in the dividers. Placed where a dam's pile will press: just above a barricade of either
-    //     neighbouring column when there is one. HP 100-250 by tier. ---
-    if (nc >= 2) {
-      var perm = [0, 1, 2].slice(0, nc - 1), pj, pt, dHP = Math.min(250, 100 + (tier - 1) * 15);
-      for (i = perm.length - 1; i > 0; i--) { pj = (rnd() * (i + 1)) | 0; pt = perm[i]; perm[i] = perm[pj]; perm[pj] = pt; }
-      for (i = 0; i < nc - 1; i++) {
-        if (i > 0 && rnd() > 0.8) continue;
-        var dy1 = 0;
-        for (j = 0; j < L.terrain.length; j++) if ((L.barrCol[j] === i || L.barrCol[j] === i + 1) && L.terrain[j][6] !== 255) dy1 = Math.max(dy1, L.terrain[j][1] + 6);
-        if (!dy1) dy1 = 200 + perm[i] * 60 + rnd() * 20;
-        if (dy1 - DOOR_H < BASE_BOTTOM + 4) dy1 = BASE_BOTTOM + 4 + DOOR_H;
-        L.doors.push([i, Math.round(dy1 - DOOR_H), Math.round(dy1), dHP + ((rnd() * 20) | 0)]);
-      }
     }
 
     // --- static obstacles (placed away from gate rows, terrain lanes and each other) ---
@@ -393,7 +417,7 @@
     L.throughput = levelThroughput(L.mtm) * Math.pow(OBST_BUMPER_EFF, L.bumpers.length) * Math.pow(OBST_HOLE_EFF, L.holes.length) * L.terrainEff;
     L.baseHP = Math.round(L.throughput * BASE_TTK * HP_SCALE * (1 + HP_PER_TIER * (tier - 1)));
     if (L.pour && L.gates.length) L.baseHP = Math.round(L.baseHP * POUR_GATE_HP);   // an endless pour starves gate lanes of leaked blues too: shave their base HP
-    if (L.pour && L.gates.length === 0) { L.baseHit = BASE_HIT; L.baseHP = Math.round(POUR_BASE_HP * Math.pow(1 + ATTRITION, n - 1)); }   // gateless pour levels: a leaked blue hits for BASE_HIT; about POUR_BASE_HP / BASE_HIT = 17 leaks kill the base on L1
+    if (L.pour && L.gates.length === 0) { L.baseHit = BASE_HIT; L.baseHP = Math.round(POUR_BASE_HP * Math.pow(1 + ATTRITION, m - 1)); }   // gateless pour levels: a leaked blue hits for BASE_HIT; about POUR_BASE_HP / BASE_HIT = 17 leaks kill the base on L1
     L.bossHP = isBoss ? Math.round(L.throughput * BOSS_TTK * HP_SCALE) : 0;
     return L;
   }
@@ -472,9 +496,7 @@
     var bx = tCX[k], by = tCY[k], hw = tHW[k], type = tType[k], n = type === 2 ? Math.min(RED_BURST_MAX, 4 + (tMax[k] >> 3)) : (tMax[k] > 12 ? BURST_MAX : 6 + (tMax[k] >> 1)), j;
     removeBarricade(k);
     spawnPop(bx, by);
-    if (type === 1) {                           // blue: leaves a translucent x2 zone across its column for ZONE_TIME s
-      if (zoneCount < MAX_ZONES) { zoneCol[zoneCount] = colOf(bx); zoneY[zoneCount] = by; zoneT[zoneCount] = ZONE_TIME; zoneCount++; }
-    } else if (type === 2) {                    // red: a burst of reds pours downward
+    if (type === 2) {                    // red: a burst of reds pours downward
       for (j = 0; j < n; j++) if (!spawnRed(bx + (Math.random() * 2 - 1) * (hw - RED_R), by + 8 + Math.random() * 8, 0)) break;
     }
   }
@@ -511,24 +533,27 @@
   var rky = new Float32Array(MAX_RED);
   var rvy = new Float32Array(MAX_RED);     // Phase 13: real vertical velocity (gravity, halts when supported)
   var rpx = new Float32Array(MAX_RED), rpy = new Float32Array(MAX_RED);   // position at the start of the step (velocity = displacement / dt)
-  var rcr = new Float32Array(MAX_RED);     // lateral wall overshoot accumulated this step (the crush push)
-  var rcd = new Float32Array(MAX_RED);     // per-mob door-hit cooldown
-  var rside = new Int8Array(MAX_RED);
+  // VERTICAL SURGE: when SURGE_TOUCH+ mobs are jammed touching each other in the chute, the whole stack lunges: +50% speed and knockback
+  // immunity for SURGE_TIME s (then a SURGE_CD s cooldown so a pile can't chain-surge forever). The player must trim the front line.
+  var SURGE_TOUCH = 5, SURGE_TIME = 1.5, SURGE_CD = 3, SURGE_SPEED = 1.5, SURGE_TOUCH_K = 1.1, SURGE_MIN_Y = 90, SURGE_JAM_VY = 45, surgeClock = 0, surges = 0;
+  var rsurge = new Float32Array(MAX_RED), rscd = new Float32Array(MAX_RED), rnb = new Uint8Array(MAX_RED);
   var rdead = new Uint8Array(MAX_RED);
   var rtype = new Uint8Array(MAX_RED);     // Bestiary type id
-  var rhp = new Uint8Array(MAX_RED);       // red shield: RED_HP blues to destroy one red
+  var rmax = new Uint16Array(MAX_RED);     // spawn HP (after the level multiplier): wound colouring compares against this
+  var redHpMul = 1, RED_HP_CAP = 60000, RED_HP_GROWTH = 1.15;    // L5+: red HP x 1.15^(level-5), compounding (tuning history: 1.5 -> 1.15 -> 1.25 -> 1.10 -> 1.15; L7 = +21% over L5)
+  var rhp = new Uint16Array(MAX_RED);       // red shield: RED_HP blues to destroy one red
   var redCount = 0;
   function spawnRed(x, y, type) {
     type = type | 0;
     if (redCount >= MAX_RED || y + RT_RAD[type] > TRACK_Y) return false;
     var i = redCount++;
-    rx[i] = x; ry[i] = y; rvx[i] = 0; rvy[i] = redSpeed * RT_SPEED[type] > RED_SPEED_CAP ? RED_SPEED_CAP : redSpeed * RT_SPEED[type]; rkx[i] = 0; rky[i] = 0; rcr[i] = 0; rcd[i] = 0; rside[i] = 0; rdead[i] = 0; rhp[i] = RT_HP[type]; rtype[i] = type;
+    rx[i] = x; ry[i] = y; rvx[i] = 0; rvy[i] = redSpeed * RT_SPEED[type] > RED_SPEED_CAP ? RED_SPEED_CAP : redSpeed * RT_SPEED[type]; rkx[i] = 0; rky[i] = 0; rdead[i] = 0; rtype[i] = type; rsurge[i] = 0; rscd[i] = 0; rhp[i] = rmax[i] = Math.min(RED_HP_CAP, Math.round(RT_HP[type] * redHpMul));
     return true;
   }
 
   function copyRed(w, i) {
-    rx[w] = rx[i]; ry[w] = ry[i]; rvx[w] = rvx[i]; rvy[w] = rvy[i]; rhp[w] = rhp[i]; rtype[w] = rtype[i]; rkx[w] = rkx[i]; rky[w] = rky[i];
-    rcr[w] = rcr[i]; rcd[w] = rcd[i]; rside[w] = rside[i];
+    rx[w] = rx[i]; ry[w] = ry[i]; rvx[w] = rvx[i]; rvy[w] = rvy[i]; rhp[w] = rhp[i]; rmax[w] = rmax[i]; rtype[w] = rtype[i]; rkx[w] = rkx[i]; rky[w] = rky[i];
+    rsurge[w] = rsurge[i]; rscd[w] = rscd[i];
   }
 
   // ---------- Spatial grid for blue-vs-red (linked lists in typed arrays, zero allocation) ----------
@@ -626,7 +651,7 @@
   var mixTank = 0, mixSprinter = 0;
   var waveQueue = 0, wq = new Int16Array(MAX_COLS), pa = new Float32Array(MAX_COLS), waveCursor = 0;   // reds leave a pipe at the top of a column (or the boss) as a stream
   var baseHit = 1, sandbox = false, sandAcc = 0, pipeRate = PIPE_RATE, pourInf = false;
-  var tq = new Int16Array(MAX_COLS), ta = new Float32Array(MAX_COLS), threatsOn = true, threatClock = 0;   // threat-budget waves queued per column
+  var tq = new Int16Array(MAX_COLS), ta = new Float32Array(MAX_COLS);
   var crateActive = false, crateX = 0, crateY = 0, crateHP = 0, crateTimer = 17;
   var pillX = new Float32Array(PILL_MAX), pillY = new Float32Array(PILL_MAX), pillT = new Uint8Array(PILL_MAX), pillCount = 0;
   var powerLeft = 0, powerName = '';
@@ -637,6 +662,10 @@
   var redTimer = 3;
   var baseHeat = 0, ghostHP = 1200, cannonFlash = 0;   // baseHeat: damage flicker; ghostHP: chip-damage trail
   var gateFlash = new Float32Array(MAX_GATES);
+  // Gate concurrency cap: gates are introduced one at a time. The number of ACTIVE gates is capped by the live blue-mob count
+  // (< 10 mobs: 1 gate, 10-24: 2 gates, 25+: no extra limit). A dormant gate is invisible and inert until a slot frees under the cap.
+  var gateOn = new Uint8Array(MAX_GATES);
+  function gateCap(nMobs) { var c = nMobs < 10 ? 1 : (nMobs < 25 ? 2 : 99); return c < tunGateConc ? c : tunGateConc; }
   var blueCX = W / 2, blueN = 0;           // blue centroid from previous frame
   var autoFire = true, spawnerOn = true;   // toggled only by debug hooks
 
@@ -720,12 +749,93 @@
   document.addEventListener('touchmove', function (e) { e.preventDefault(); }, { passive: false });
   document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
+  // ---------- Debug tuning harness (#debug-harness) ----------
+  function applyChute(w) {                                  // re-lay the single chute at width w: columns, barricade plugs, gate tracks
+    var old = COL_W[1]; if (w === old) return;
+    COL_W[1] = w; setColumns(1);
+    var cx = (colX0[0] + colX1[0]) / 2, k;
+    for (k = 0; k < terrainCount; k++) if (tType[k] !== 255) { tCX[k] = cx; tHW[k] = w / 2; }
+    for (k = 0; k < gateCount; k++) {
+      var G = GATES[k], f = (G.x - G.min) / ((G.max - G.min) || 1);
+      G.w = Math.round(G.w * w / old); G.min = colX0[0]; G.max = colX1[0] - G.w; if (G.max < G.min) G.max = G.min;
+      G.x = G.min + (G.max - G.min) * f;
+    }
+  }
+  var TUNE_DEFAULT_ON = false;   // MAIN: panel hidden unless the URL has #tune (the funnel test build sets this to true). The panel is to be removed from main entirely later.
+  var TUNE_DEFS = [   // key, label, min, max, step, live (applies next frame) or needs Restart Level
+    ['chuteWidth', 'Chute width (px)', 56, 200, 2, true], ['mobDensity', 'Mob density (x)', 0.5, 6, 0.1, true],
+    ['mobSpeed', 'Mob speed (px/s)', 40, 400, 5, true], ['mobRedHP', 'Mob base HP (new spawns)', 1, 60, 1, true],
+    ['gateConcurrency', 'Gate concurrency', 1, 4, 1, true], ['gateXRange', 'Gate x max', 1.1, 6, 0.1, false],
+    ['playerDmg', 'Player dmg (x)', 0.5, 5, 0.1, true], ['playerBullets', 'Player bullets', 1, 9, 1, true]
+  ];
+  var tuneEls = {}, tuneLvl = null, tuneAdv = null;
+  (function buildHarness() {
+    var st = document.createElement('style');
+    st.textContent = '#debug-harness{position:absolute;top:58px;left:8px;z-index:9999;width:210px;padding:6px 8px;background:rgba(8,10,20,.82);color:#cfe3ff;font:11px/1.25 system-ui,sans-serif;border:1px solid #3a4a7a;border-radius:8px}' +
+      '#debug-harness .dh-h{display:flex;justify-content:space-between;align-items:center;font-weight:700;margin-bottom:2px}#debug-harness .dh-b{display:none}#debug-harness.open .dh-b{display:block}' +
+      '#debug-harness .dh-r{margin:3px 0}#debug-harness .dh-r div{display:flex;justify-content:space-between}#debug-harness input[type=range]{width:100%;margin:0;height:14px}' +
+      '#debug-harness button{font:700 11px system-ui;padding:3px 8px;border-radius:5px;border:1px solid #5a7acc;background:#1c2a55;color:#fff;cursor:pointer}#debug-harness .dh-live{color:#6f6}#debug-harness .dh-rs{color:#fc6}';
+    document.head.appendChild(st);
+    var box = document.createElement('div'); box.id = 'debug-harness'; box.className = 'open';
+    box.style.display = (TUNE_DEFAULT_ON || /(^|[#&?])tune\b/.test(location.hash + location.search)) ? '' : 'none';   // hidden unless this build shows it by default or the URL has #tune
+    var hd = document.createElement('div'); hd.className = 'dh-h'; tuneLvl = document.createElement('span'); hd.appendChild(tuneLvl);
+    var tg = document.createElement('button'); tg.textContent = '\u2013'; tg.onclick = function () { box.classList.toggle('open'); tg.textContent = box.classList.contains('open') ? '\u2013' : '+'; }; hd.appendChild(tg); box.appendChild(hd);
+    var body = document.createElement('div'); body.className = 'dh-b'; box.appendChild(body);
+    tuneErrEl = document.createElement('div'); tuneErrEl.style.cssText = 'display:none;color:#ff8080;font-size:10px;word-break:break-all;margin:3px 0'; body.appendChild(tuneErrEl);
+    TUNE_DEFS.forEach(function (d) {
+      var row = document.createElement('div'); row.className = 'dh-r';
+      var top = document.createElement('div'), lab = document.createElement('span'), val = document.createElement('span');
+      lab.innerHTML = d[1] + ' <span class="' + (d[5] ? 'dh-live' : 'dh-rs') + '">' + (d[5] ? '\u25cf live' : '\u21bb restart') + '</span>'; top.appendChild(lab); top.appendChild(val);
+      var inp = document.createElement('input'); inp.type = 'range'; inp.min = d[2]; inp.max = d[3]; inp.step = d[4];
+      inp.oninput = function () { TUNING[d[0]] = parseFloat(inp.value); val.textContent = inp.value; if (d[0] === 'gateXRange') tuneRefresh(); };
+      row.appendChild(top); row.appendChild(inp); body.appendChild(row); tuneEls[d[0]] = { inp: inp, val: val };
+      if (d[0] === 'gateXRange') { var ar = document.createElement('div'); ar.className = 'dh-r'; ar.innerHTML = 'Shooter advantage + range = X \u2212 1: <b></b>'; tuneAdv = ar.lastChild; body.appendChild(ar); }
+    });
+    var rb = document.createElement('button'); rb.textContent = 'Restart Level'; rb.style.marginTop = '4px'; rb.onclick = function () { tunApply = true; try { reset(); if (tuneErrEl) tuneErrEl.style.display = 'none'; } catch (err) { tuneError(err, 'restart'); } finally { tunApply = false; } };
+    body.appendChild(rb);
+    var cb = document.createElement('button'); cb.textContent = 'Copy Settings'; cb.style.cssText = 'margin:4px 0 0 6px';
+    cb.onclick = function () {                                   // JSON of the level + every tuning value, ready to paste back
+      var o = { level: level }; for (var k in TUNING) o[k] = Math.round(TUNING[k] * 100) / 100; if (window.__lastError) o.error = window.__lastError;
+      var txt = JSON.stringify(o);
+      function done(ok) { cb.textContent = ok ? 'Copied!' : 'Copy failed'; setTimeout(function () { cb.textContent = 'Copy Settings'; }, 1200); }
+      function fallback() { var ta = document.createElement('textarea'); ta.value = txt; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); var ok = false; try { ok = document.execCommand('copy'); } catch (e) {} document.body.removeChild(ta); if (!ok) window.prompt('Copy settings:', txt); done(ok); }
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(function () { done(true); }, fallback); else fallback();
+    };
+    body.appendChild(cb);
+    // PWA install diagnostics: Chrome only fires beforeinstallprompt when it thinks the app is installable AND not installed.
+    var pw = document.createElement('div'); pw.className = 'dh-r'; pw.style.cssText = 'margin-top:6px;border-top:1px solid #3a4a7a;padding-top:4px';
+    var pst = document.createElement('div'); pst.textContent = 'PWA: waiting for install event...'; pw.appendChild(pst);
+    var pb = document.createElement('button'); pb.textContent = 'Install App'; pb.style.display = 'none'; pw.appendChild(pb);
+    var pdet = document.createElement('div'); pdet.style.cssText = 'font-size:10px;opacity:.8;word-break:break-all'; pw.appendChild(pdet);
+    body.appendChild(pw);
+    var dip = null;
+    window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); dip = e; pst.textContent = 'PWA: installable (not installed) \u2713'; pb.style.display = 'inline-block'; });
+    pb.onclick = function () { if (dip) { dip.prompt(); dip = null; pb.style.display = 'none'; } };
+    window.addEventListener('appinstalled', function () { pst.textContent = 'PWA: installed'; pb.style.display = 'none'; });
+    var standalone = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+    setTimeout(function () { if (!dip && /waiting/.test(pst.textContent)) pst.textContent = standalone ? 'PWA: running installed (standalone)' : 'PWA: no install event - the browser believes it is already installed or not installable'; }, 4000);
+    if (navigator.serviceWorker) navigator.serviceWorker.getRegistration().then(function (r) { fetch('manifest.json', { cache: 'no-store' }).then(function (x) { return x.json(); }).then(function (m) { pdet.textContent = 'sw:' + (r ? 'registered' : 'none') + ' id:' + m.id + ' scope:' + m.scope + ' page:' + location.pathname; }).catch(function () {}); }).catch(function () {});
+    ['pointerdown', 'pointermove', 'pointerup', 'touchstart', 'touchmove', 'touchend', 'mousedown', 'click'].forEach(function (ev) { box.addEventListener(ev, function (e) { e.stopPropagation(); }); });   // sliders must not fire the cannon or be eaten by the page's touchmove guard
+    (document.getElementById('stage') || document.body).appendChild(box);
+  })();
+  var tuneErrEl = null;
+  function tuneError(err, where) {
+    var msg = where + ': ' + (err && err.message ? err.message : err) + ' @ ' + (((err && err.stack) || '').split('\n')[1] || '').trim();
+    window.__lastError = msg;
+    if (tuneErrEl) { tuneErrEl.textContent = msg; tuneErrEl.style.display = 'block'; }
+  }
+  function tuneRefresh() {
+    for (var k in tuneEls) { tuneEls[k].inp.value = TUNING[k]; tuneEls[k].val.textContent = String(Math.round(TUNING[k] * 100) / 100); }
+    if (tuneAdv) tuneAdv.textContent = '+' + (Math.round((TUNING.gateXRange - 1) * 100) / 100);
+    if (tuneLvl) tuneLvl.textContent = 'TUNE \u00b7 Level ' + level;
+  }
+
   // ---------- Game logic ----------
   function loadObstacles(L) {
     var i;
     gateCount = L.gates.length;
     for (i = 0; i < MAX_GATES; i++) {
-      gateFlash[i] = 0;
+      gateFlash[i] = 0; gateOn[i] = 0;
       if (i < gateCount) cfgGate(GATES[i], L.gates[i]);
     }
     bumpCount = L.bumpers.length;
@@ -742,10 +852,14 @@
     setColumns(L.cols);
     mobCount = 0; redCount = 0;
     isBossLevel = L.isBoss;
-    baseMaxHP = L.baseHP; baseHP = baseMaxHP; baseHit = L.baseHit || 1;
+    baseMaxHP = L.sandbox ? L.baseHP : Math.max(1, Math.round(L.baseHP * BASE_HP_SCALE)); baseHP = baseMaxHP;   // TTK baseline shift: HQ base HP x0.5 baseHit = L.baseHit || 1;
     bossActive = false; bossMaxHP = L.bossHP; bossHP = L.bossHP; bossHeat = 0;
     cannonHP = CANNON_MAX_HP;
-    redInterval = L.redInterval; waveMin = L.waveMin; waveMax = L.waveMax; redSpeed = RED_SPEED_BASE * L.redSpeedMul; mixTank = L.mixTank; mixSprinter = L.mixSprinter;
+    redHpMul = (!sandbox && effLevel(level) >= 5) ? Math.pow(RED_HP_GROWTH, effLevel(level) - 5) : 1;   // difficulty buff: compounding per level from L5
+    if (tunApply && !sandbox) redHpMul = TUNING.mobRedHP / RT_HP[0];
+    levelDensity = SPAWN_DENSITY * (L.sandbox ? 1 : (tunApply ? TUNING.mobDensity : densityFor(L.n)));
+    redInterval = L.redInterval / levelDensity; waveMin = L.waveMin; waveMax = L.waveMax; redSpeed = RED_SPEED_BASE * L.redSpeedMul + (sandbox ? 0 : effLevel(level) * RED_SPEED_PER_LEVEL); mixTank = L.mixTank; mixSprinter = L.mixSprinter;
+    if (tunApply && !sandbox) redSpeed = TUNING.mobSpeed;
     bossSpeed = BOSS_STRAFE * L.redSpeedMul; bossDir = 1; bossX = (AX0 + AX1) / 2; bossY = BASE_Y + BOSS_H / 2 + 20;
     cannonX = targetX = (AX0 + AX1) / 2;
     bossWave = Math.max(3, Math.min(12, Math.round(L.waveMin * 0.35 * BOSS_WAVE_K))); bossInterval = Math.max(8, 12 - L.tier * 0.2) * BOSS_INT_K;   // smaller waves, slower cadence than any level
@@ -753,14 +867,10 @@
     fireAcc = 0; fireCount = 0;
     redTimer = 2;                                        // short grace period before the first wave / the boss
     waveQueue = 0; waveCursor = 0; for (var wc = 0; wc < MAX_COLS; wc++) { wq[wc] = 0; pa[wc] = 0; }
-    pipeRate = PIPE_RATE;
+    pipeRate = PIPE_RATE * levelDensity;
     pourInf = !!L.pour;
-    if (L.pour) { pipeRate = L.pourRate / L.cols / (1 + POUR_COL_EASE * (L.cols - 1)); /* one cannon guards one lane at a time: wider boards pour a bit less per lane */ redTimer = 1e9; queueWave(L.pour); }   // Phase 16: one sustained pour, no further random waves
-    threatClock = 0;
-    for (var tc2 = 0; tc2 < MAX_COLS; tc2++) { tq[tc2] = 0; ta[tc2] = 0; }
-    if (threatsOn) for (var th = 0; th < L.threats.length; th++) if (L.threats[th][0] < colN) tq[L.threats[th][0]] += L.threats[th][1];
-    doorCount = L.doors.length; zoneCount = 0;
-    for (var dk = 0; dk < doorCount; dk++) { doorDiv[dk] = L.doors[dk][0]; doorY0[dk] = L.doors[dk][1]; doorY1[dk] = L.doors[dk][2]; doorHP[dk] = doorMax[dk] = L.doors[dk][3]; doorOpen[dk] = 0; doorFlash[dk] = 0; }
+    if (L.pour) { pipeRate = L.pourRate * levelDensity / (1 + POUR_COL_EASE * (L.cols - 1)); /* one cannon guards one lane at a time: wider boards pour a bit less per lane */ redTimer = 1e9; queueWave(L.pour); }   // Phase 16: one sustained pour, no further random waves
+    surgeClock = 0; surges = 0;
     crateActive = false; crateTimer = CRATE_MIN + Math.random() * (CRATE_MAX - CRATE_MIN); pillCount = 0;
     powerLeft = 0; powerName = ''; setWeapon(Armory[baseWeaponName]);
     baseHeat = 0; ghostHP = baseHP; cannonFlash = 0;
@@ -768,6 +878,13 @@
     for (var p = 0; p < POP_MAX; p++) popLife[p] = 0;
     loadObstacles(L);
     overlay.classList.remove('show', 'lose');
+    if (tunApply) { tunGateConc = TUNING.gateConcurrency; if (!sandbox) applyChute(TUNING.chuteWidth); }
+    else if (!sandbox) {                                   // a fresh level: the sliders physically move to this level's math
+      TUNING.chuteWidth = COL_W[1]; TUNING.mobDensity = Math.round(levelDensity * 100) / 100; TUNING.mobSpeed = Math.round(redSpeed);
+      TUNING.mobRedHP = Math.round(RT_HP[0] * redHpMul); TUNING.gateXRange = Math.round(gateWinBase(level)[1] * 10) / 10;
+      TUNING.gateConcurrency = Math.max(1, Math.min(4, gateCount)); tunGateConc = TUNING.gateConcurrency;
+    }
+    tuneRefresh();
   }
 
   function endGame(newState) {
@@ -823,7 +940,7 @@
   // Spawn clones for gate `gi` triggered by blue mob `mobIdx` at (x, y).
   function applyGate(mobIdx, gi, x, y) {
     var gate = GATES[gi];
-    var extra = gate.type === 'x' ? gate.n - 1 : gate.n;
+    var ex = gate.type === 'x' ? gate.n - 1 : gate.n, extra = Math.floor(ex) + (Math.random() < ex - Math.floor(ex) ? 1 : 0);   // fractional gates: probabilistic rounding
     var mask = (1 << gi) | mmask[mobIdx];   // clones inherit every gate the parent has passed
     gateFlash[gi] = 1;
     sfxGate();
@@ -836,37 +953,32 @@
   }
 
   // Red waves are queued and released as a concentrated stream from one pipe at the top (or from the boss hull).
+  // FUNNEL: every red enters the board from ONE column, the centre lane (odd lane counts: the middle lane; even counts:
+  // one of the two middle lanes, alternating per call). The rest of the board fills only by the overflow 'spill' below.
+  function funnelCol() { return 0; }                              // single chute: every red enters the one lane
   function queueWave(fixedN) {
     var n = fixedN || (waveMin + ((Math.random() * (waveMax - waveMin + 1)) | 0)), j;
     if (n > MAX_RED - redCount - waveQueue) n = MAX_RED - redCount - waveQueue;      // never overrun the pool
     if (n <= 0) return;
     if (isBossLevel && bossActive) wq[0] += n;                 // the mothership drips them out of its hull
-    else {                                                     // dispatch: alternate columns; higher tiers hit several at once
-      var spread = colN >= 4 ? (level >= 41 ? 3 : 2) : (colN === 3 ? 2 : 1), share, rem;
-      var need = Math.ceil(n / 16); if (need > spread) spread = need > colN ? colN : need;   // big waves fan out so no column takes more than ~16
-      share = (n / spread) | 0; rem = n - share * spread;
-      for (j = 0; j < spread; j++) wq[(waveCursor + j) % colN] += share + (j < rem ? 1 : 0);
-      waveCursor = (waveCursor + spread) % colN;
-    }
+    else wq[0] += n;
     waveQueue += n;
   }
   function emitRed(c, cx, half) {
-    var rr = Math.random(), px = cx + (Math.random() * 2 - 1) * half + (Math.random() * 2 - 1) * SPAWN_JITTER;   // jitter: never two mobs on the same pixel
-    px = px < colX0[c] + RED_R ? colX0[c] + RED_R : (px > colX1[c] - RED_R ? colX1[c] - RED_R : px);
-    return spawnRed(px, (isBossLevel && bossActive ? bossY + BOSS_H / 2 - 6 : BASE_BOTTOM) + RED_R + 6 + (Math.random() * 2 - 1) * SPAWN_JITTER, rr < mixSprinter ? 2 : (rr < mixSprinter + mixTank ? 1 : 0));
-  }
-  function threatStream(dt) {
-    if (!isBossLevel || bossActive) threatClock += dt;       // the budget starts bleeding in THREAT_DELAY s after play (boss: after it appears)
-    if (threatClock < THREAT_DELAY) return;                    // threat-budget reds leave the top edge of their (adjacent) column
-    for (var c = 0; c < colN; c++) {
-      if (tq[c] <= 0) { ta[c] = 0; continue; }
-      ta[c] += dt * THREAT_RATE;
-      while (ta[c] >= 1 && tq[c] > 0) {
-        var half = (colX1[c] - colX0[c]) / 2 - RED_R - 1;
-        if (!emitRed(c, (colX0[c] + colX1[c]) / 2, half < 24 ? half : 24)) { ta[c] = 0; break; }
-        ta[c] -= 1; tq[c]--;
+    var rr = Math.random(), type = rr < mixSprinter ? 2 : (rr < mixSprinter + mixTank ? 1 : 0), att, j;
+    var py = (isBossLevel && bossActive ? bossY + BOSS_H / 2 - 6 : BASE_BOTTOM) + RED_R + 6 + (Math.random() * 2 - 1) * SPAWN_JITTER;
+    for (att = 0; att < 3; att++) {
+      var px = cx + (Math.random() * 2 - 1) * half + (Math.random() * 2 - 1) * SPAWN_JITTER;   // jitter: never two mobs on the same pixel
+      px = px < colX0[c] + RED_R ? colX0[c] + RED_R : (px > colX1[c] - RED_R ? colX1[c] - RED_R : px);
+      var clear = true;                                       // back-pressure: never spawn inside a pile at the mouth; the queue waits instead
+      for (j = 0; j < redCount; j++) {
+        if (rdead[j] || ry[j] > py + 40) continue;
+        var ddx = rx[j] - px, ddy = ry[j] - py, rs = (RT_RAD[type] + RT_RAD[rtype[j]]) * 0.9;
+        if (ddx * ddx + ddy * ddy < rs * rs) { clear = false; break; }
       }
+      if (clear) return spawnRed(px, py, type);
     }
+    return false;
   }
   function pipeStream(dt) {
     var c;
@@ -885,7 +997,7 @@
       pa[c] += dt * pipeRate;
       while (pa[c] >= 1 && wq[c] > 0) {
         var half = (colX1[c] - colX0[c]) / 2 - RED_R - 1;
-        if (!emitRed(c, (colX0[c] + colX1[c]) / 2, half < 24 ? half : 24)) { pa[c] = 0; break; }
+        if (!emitRed(c, (colX0[c] + colX1[c]) / 2, half < MOUTH_HALF ? half : MOUTH_HALF)) { pa[c] = 0; break; }
         pa[c] -= 1; wq[c]--; waveQueue--;
       }
     }
@@ -928,25 +1040,40 @@
       }
     }
   }
-  // Closed pressure door touching red i (column rc, pushing toward `side`) or -1
-  function doorAt(rc, side, y, rad) {
-    var d = side > 0 ? rc : rc - 1;
-    for (var k = 0; k < doorCount; k++) if (doorDiv[k] === d && !doorOpen[k] && y >= doorY0[k] - rad && y <= doorY1[k] + rad) return k;
-    return -1;
-  }
-  function breachDoor(k, side) {                 // the door shatters for good; the pressurised stack spills through the gap
-    doorOpen[k] = 1; doorHP[k] = 0;
-    var d = doorDiv[k], mx0 = (colX1[d] + colX0[d + 1]) * 0.5, my0 = (doorY0[k] + doorY1[k]) * 0.5, j;
-    for (j = 0; j < 5; j++) spawnPop(mx0 + (Math.random() - 0.5) * 10, my0 + (Math.random() - 0.5) * (doorY1[k] - doorY0[k]));
-    sfxHit();
-    var from = side > 0 ? d : d + 1;
-    for (j = 0; j < redCount; j++) {
-      if (ry[j] < doorY0[k] - 40 || ry[j] > doorY1[k] + 40) continue;
-      if (colOf(rx[j]) !== from) continue;
-      rkx[j] = side * BREACH_V; rvx[j] = side * BREACH_V * 0.5;
+  // Vertical Surge: count touching neighbours per red (uniform grid); a red with SURGE_TOUCH-1 neighbours + itself = 5 touching mobs is a jam.
+  // The whole touching cluster lunges for SURGE_TIME s. Mobs still at the spawn mouth are exempt so a normal pour never self-triggers.
+  function verticalSurge(dt) {
+    var i, j, cols = RG_COLS, rows = RG_ROWS;
+    for (i = 0; i < redCount; i++) { if (rsurge[i] > 0) rsurge[i] -= dt; if (rscd[i] > 0) rscd[i] -= dt; }
+    if (redCount < SURGE_TOUCH) return;
+    surgeClock += dt; if (surgeClock < 0.1) return; surgeClock = 0;
+    buildRedGrid();
+    for (i = 0; i < redCount; i++) rnb[i] = 0;
+    for (i = 0; i < redCount; i++) {
+      if (rdead[i]) continue;
+      var cx = (rx[i] / 24) | 0, cy = (ry[i] / 24) | 0;
+      cx = cx < 0 ? 0 : (cx >= cols ? cols - 1 : cx); cy = cy < 0 ? 0 : (cy >= rows ? rows - 1 : cy);
+      for (var yy = (cy > 0 ? cy - 1 : 0); yy <= (cy < rows - 1 ? cy + 1 : rows - 1); yy++) {
+        for (var xx = (cx > 0 ? cx - 1 : 0); xx <= (cx < cols - 1 ? cx + 1 : cols - 1); xx++) {
+          for (j = rgHead[yy * cols + xx]; j !== -1; j = rgNext[j]) {
+            if (j <= i || rvy[i] > SURGE_JAM_VY || rvy[j] > SURGE_JAM_VY) continue;   // only a STALLED jam counts, free-flowing traffic never surges
+            var dx = rx[j] - rx[i], dy = ry[j] - ry[i], rr = (RT_RAD[rtype[i]] + RT_RAD[rtype[j]]) * SURGE_TOUCH_K;
+            if (dx * dx + dy * dy < rr * rr) { if (rnb[i] < 250) rnb[i]++; if (rnb[j] < 250) rnb[j]++; }
+          }
+        }
+      }
+    }
+    for (i = 0; i < redCount; i++) {
+      if (rdead[i] || rvy[i] > SURGE_JAM_VY || rnb[i] < SURGE_TOUCH - 1 || rscd[i] > 0 || ry[i] < BASE_BOTTOM + SURGE_MIN_Y) continue;
+      var any = false;
+      for (j = 0; j < redCount; j++) {                                  // the touching cluster around i surges together
+        if (rdead[j] || rscd[j] > 0 || rvy[j] > SURGE_JAM_VY) continue;
+        var ex = rx[j] - rx[i], ey = ry[j] - ry[i], er = (RT_RAD[rtype[i]] + RT_RAD[rtype[j]]) * SURGE_TOUCH_K * 1.0;
+        if (j === i || ex * ex + ey * ey < er * er) { rsurge[j] = SURGE_TIME; rscd[j] = SURGE_TIME + SURGE_CD; any = true; }
+      }
+      if (any) surges++;
     }
   }
-  function hitDoor(k, side) { doorHP[k]--; doorFlash[k] = 1; sfxHit(); if (doorHP[k] <= 0) breachDoor(k, side); }
 
   function spawnCrate() {
     crateActive = true; crateHP = CRATE_HP;
@@ -972,9 +1099,20 @@
     if (state !== PLAYING) return;
     var i, k, gi;
     clock += dt;
+    if (!sandbox) {                                            // live: every slider except the gate roll ceiling applies on the next frame
+      if (TUNING.chuteWidth !== COL_W[1]) applyChute(TUNING.chuteWidth);
+      if (TUNING.mobSpeed !== redSpeed) redSpeed = TUNING.mobSpeed;
+      if (TUNING.mobDensity > 0 && TUNING.mobDensity !== levelDensity) { var dR0 = TUNING.mobDensity / levelDensity; redInterval /= dR0; pipeRate *= dR0; levelDensity = TUNING.mobDensity; }
+      if (Math.round(RT_HP[0] * redHpMul) !== Math.round(TUNING.mobRedHP)) redHpMul = TUNING.mobRedHP / RT_HP[0];   // applies to mobs spawned from now on
+      tunGateConc = TUNING.gateConcurrency;
+    }
 
     // Gates slide and bounce; '-' gates recharge
+    var gActive = 0, gCap = gateCap(mobCount);
+    for (gi = 0; gi < gateCount; gi++) if (gateOn[gi]) gActive++;
+    for (gi = 0; gi < gateCount && gActive < gCap; gi++) if (!gateOn[gi]) { gateOn[gi] = 1; gActive++; }   // spawn the next gate only while under the cap
     for (gi = 0; gi < gateCount; gi++) {
+      if (!gateOn[gi]) continue;
       var G = GATES[gi];
       G.x += G.vx * dt;
       if (G.x < G.min) { G.x = G.min; G.vx = Math.abs(G.vx); }
@@ -994,8 +1132,9 @@
       while (fireAcc >= 1) {
         fireAcc -= 1;
         if ((fireCount++ % 3) === 0) sfxPop();       // every 3rd shot to keep audio light
-        for (var pl = 0; pl < weapon.pellets; pl++) {
-          spawnMob(muzzleX, CANNON_Y - MUZZLE_OFF, (pl - (weapon.pellets - 1) / 2) * weapon.spreadVx + (Math.random() - 0.5) * 2 * (weapon.spread || SPREAD), -MOB_SPEED, 0);
+        var nPel = weapon.pellets + Math.max(1, Math.round(TUNING.playerBullets)) - 1, pSv = weapon.spreadVx || 60;   // live: playerBullets adds projectiles per trigger
+        for (var pl = 0; pl < nPel; pl++) {
+          spawnMob(muzzleX, CANNON_Y - MUZZLE_OFF, (pl - (nPel - 1) / 2) * pSv + (Math.random() - 0.5) * 2 * (weapon.spread || SPREAD), -MOB_SPEED, 0);
         }
       }
     } else if (fireAcc > 1) {
@@ -1020,15 +1159,9 @@
 
     if (spawnerOn && !sandbox) {
       if (pourInf && waveQueue < POUR_REFILL) queueWave(POUR_REFILL * 2);   // Phase 17: the pour never ends; only the base's HP hitting 0 ends the level
-      pipeStream(dt); threatStream(dt);
+      pipeStream(dt);
       if (!crateActive && level > 2) { crateTimer -= dt; if (crateTimer <= 0) spawnCrate(); }
     }
-    for (k = zoneCount - 1; k >= 0; k--) {          // multiplier zones expire; doors cool their crack flash
-      zoneT[k] -= dt;
-      if (zoneT[k] <= 0) { zoneCount--; zoneCol[k] = zoneCol[zoneCount]; zoneY[k] = zoneY[zoneCount]; zoneT[k] = zoneT[zoneCount]; }
-    }
-    for (k = 0; k < doorCount; k++) if (doorFlash[k] > 0) doorFlash[k] -= dt * 4;
-    if (zoneFlash > 0) zoneFlash -= dt * 4;
     if (powerLeft > 0) { powerLeft -= dt; if (powerLeft <= 0) { powerLeft = 0; powerName = ''; setWeapon(Armory[baseWeaponName]); } }
 
     // Red mass centroid (for blue attraction); the boss is the red mass on boss levels
@@ -1055,10 +1188,7 @@
         var a = (redCX - x) * BLUE_ATTRACT;
         vx += (a > BLUE_ATTRACT_MAX ? BLUE_ATTRACT_MAX : (a < -BLUE_ATTRACT_MAX ? -BLUE_ATTRACT_MAX : a)) * dt;
       }
-      var bc = colOf(mx[i]), bl = colX0[bc] + MOB_R, br = colX1[bc] - MOB_R;      // blues never leave their column...
-      for (k = 0; k < doorCount; k++) {                                          // ...except through a breached pressure door
-        if (doorOpen[k] && (bc === doorDiv[k] || bc === doorDiv[k] + 1) && y >= doorY0[k] && y <= doorY1[k]) { bl = colX0[doorDiv[k]] + MOB_R; br = colX1[doorDiv[k] + 1] - MOB_R; break; }
-      }
+      var bc = colOf(mx[i]), bl = colX0[bc] + MOB_R, br = colX1[bc] - MOB_R;      // blues never leave the chute
       if (x < bl) { x = bl; vx = -vx; }
       else if (x > br) { x = br; vx = -vx; }
 
@@ -1143,7 +1273,7 @@
         var gateKilled = false;
         for (gi = 0; gi < gateCount; gi++) {
           var bit = 1 << gi;
-          if (m & bit) continue;
+          if ((m & bit) || !gateOn[gi]) continue;
           var gt = GATES[gi], hh = gt.h * 0.5;
           if (x + MOB_R >= gt.x && x - MOB_R <= gt.x + gt.w &&
               y + MOB_R >= gt.y - hh && y - MOB_R <= gt.y + hh) {
@@ -1161,19 +1291,9 @@
         if (gateKilled) { killMob(i); continue; }
       }
 
-      // Multiplier zones (from shattered Blue Barricades): a blue passing through splits into two (once per mob)
-      if (zoneCount && !(mmask[i] & ZONE_BIT)) {
-        for (k = 0; k < zoneCount; k++) {
-          var zc = zoneCol[k];
-          if (x + MOB_R >= colX0[zc] && x - MOB_R <= colX1[zc] && y + MOB_R >= zoneY[k] - ZONE_H / 2 && y - MOB_R <= zoneY[k] + ZONE_H / 2) {
-            mmask[i] |= ZONE_BIT; spawnMob(x + 3, y - 2, 30 + Math.random() * 40, vy, mmask[i]); sfxGate(); zoneFlash = 1; break;
-          }
-        }
-      }
-
       // Opponent base (on boss levels the base is shielded: it absorbs blues without damage)
       if (y <= BASE_BOTTOM) {
-        if (x >= 10 && x <= W - 10) {
+        if (x >= AX0 && x <= AX1) {   // only the constricted track can reach the base
           if (!isBossLevel) {
             baseHP -= baseHit; baseHeat = baseHeat < 1 ? baseHeat + 0.12 : 1;
             if (baseHP <= 0) { baseHP = 0; killMob(i); endGame(WON); return; }
@@ -1196,9 +1316,9 @@
     for (i = 0; i < redCount; i++) {
       var rrad = RT_RAD[rtype[i]];
       var rspd = redSpeed * RT_SPEED[rtype[i]]; if (rspd > RED_SPEED_CAP) rspd = RED_SPEED_CAP;
+      if (rsurge[i] > 0) { rspd *= SURGE_SPEED; rkx[i] = 0; rky[i] = 0; }   // Vertical Surge: +50% speed (above the cap) and knockback immunity
       var vyy = rvy[i] + RED_GRAV * dt; if (vyy > rspd) vyy = rspd;
-      rpx[i] = rx[i]; rpy[i] = ry[i]; rcr[i] = 0;
-      if (rcd[i] > 0) rcd[i] -= dt;
+      rpx[i] = rx[i]; rpy[i] = ry[i];
       rkx[i] *= kd; rky[i] *= kd;
       var nx = rx[i] + (rvx[i] + rkx[i]) * dt;
       var ny = ry[i] + (vyy + rky[i]) * dt;
@@ -1233,15 +1353,11 @@
       buildRedGrid();
       for (var it = 0; it < RED_ITERS; it++) {
         separateReds();
-        for (i = 0; i < redCount; i++) {         // barricade tops / lane walls / pressure doors
+        for (i = 0; i < redCount; i++) {         // barricade tops / chute walls
           var rr0 = RT_RAD[rtype[i]], qx2 = rx[i], qy2 = ry[i];
           if (terrainCount && terrainResolve(qx2, qy2, rr0)) { qx2 = pX; qy2 = pY; }   // no sliding: a mob on a barricade simply stops
           var qc = colOf(qx2), cl0 = colX0[qc] + rr0, cl1 = colX1[qc] - rr0;
-          for (k = 0; k < doorCount; k++) {      // a breached door is a gap that both neighbouring lanes can flow through
-            if (doorOpen[k] && (qc === doorDiv[k] || qc === doorDiv[k] + 1) && qy2 >= doorY0[k] && qy2 <= doorY1[k]) { cl0 = colX0[doorDiv[k]] + rr0; cl1 = colX1[doorDiv[k] + 1] - rr0; break; }
-          }
-          if (qx2 < cl0) { rcr[i] += cl0 - qx2; rside[i] = -1; qx2 = cl0; }
-          else if (qx2 > cl1) { rcr[i] += qx2 - cl1; rside[i] = 1; qx2 = cl1; }
+          if (qx2 < cl0) qx2 = cl0; else if (qx2 > cl1) qx2 = cl1;
           rx[i] = qx2;
           ry[i] = qy2 < BASE_BOTTOM + rr0 ? BASE_BOTTOM + rr0 : qy2;
         }
@@ -1249,18 +1365,13 @@
       var idt = dt > 0 ? 1 / dt : 0, dfr = 1 - Math.min(1, dt * 12);   // viscous: sideways velocity bleeds off fast
       for (i = 0; i < redCount; i++) {
         var vxn = (rx[i] - rpx[i]) * idt, vyn = (ry[i] - rpy[i]) * idt;
-        if (rcr[i] > 0 && rcd[i] <= 0 && doorCount) {          // Crush Angle: only heavy lateral pushes hurt a door
-          var pushV = rcr[i] * idt;
-          if (crushHit(pushV, vyn)) {
-            var dk2 = doorAt(colOf(rx[i]), rside[i], ry[i], RT_RAD[rtype[i]]);
-            if (dk2 >= 0) { rcd[i] = CRUSH_CD; hitDoor(dk2, rside[i]); }
-          }
-        }
         vxn = vxn > 140 ? 140 : (vxn < -140 ? -140 : vxn);
         rvx[i] = vxn * dfr;
         rvy[i] = vyn < -40 ? -40 : vyn;
       }
     }
+
+    verticalSurge(dt);
 
     // Boss hovers at the base line, strafing left and right like a moving base
     if (bossActive) {
@@ -1293,7 +1404,9 @@
               var dx = mx[b] - rx[r], dy = my[b] - ry[r];
               if (dx * dx + dy * dy <= RT_HIT2[rtype[r]]) {
                 var dmg = bpierce[b] < rhp[r] ? bpierce[b] : rhp[r];     // piercing: one blue subtracts up to `piercing` red HP
-                rhp[r] -= dmg; bpierce[b] -= dmg;
+                var dmgR = dmg * TUNING.playerDmg, dR = Math.floor(dmgR) + (Math.random() < dmgR - Math.floor(dmgR) ? 1 : 0);   // live: playerDmg scales red HP removed (probabilistic rounding)
+                if (dR > rhp[r]) dR = rhp[r];
+                rhp[r] -= dR; bpierce[b] -= dmg;
                 if (bpierce[b] === 0) { bdead[b] = 1; killedBlue++; }
                 if (rhp[r] === 0) { rdead[r] = 1; killedRed++; }   // first hit only wounds (orange)
                 spawnPop((mx[b] + rx[r]) * 0.5, (my[b] + ry[r]) * 0.5);
@@ -1383,49 +1496,39 @@
 
   function fmt(n) { return n >= 1000 ? ((n / 1000) | 0) + ',' + ('00' + (n % 1000)).slice(-3) : '' + n; }
 
+  function drawDeadSpace(x0, x1) {
+    if (x1 - x0 < 1) return;
+    var y0 = BASE_Y, y1 = TRACK_Y;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(x0, y0, x1 - x0, y1 - y0); ctx.clip();
+    ctx.fillStyle = '#0d1226'; ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+    ctx.strokeStyle = 'rgba(255,170,70,0.14)'; ctx.lineWidth = 7;
+    for (var sx = x0 - (y1 - y0); sx < x1; sx += 26) { ctx.beginPath(); ctx.moveTo(sx, y1); ctx.lineTo(sx + (y1 - y0), y0); ctx.stroke(); }
+    ctx.restore();
+  }
+
   function render() {
     var i, k;
     ctx = wctx;
     // Background
     ctx.fillStyle = '#0b1020';
     ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = '#242a40';                          // letterbox: unused screen space is grayed out
-    ctx.fillRect(10, BASE_BOTTOM, W - 20, TRACK_Y - BASE_BOTTOM);
+    // Dead space: the margins outside the constricted track are non-playable. Dark hazard-striped panels make the funnel walls obvious.
+    drawDeadSpace(0, AX0 - 3); drawDeadSpace(AX1 + 3, W);
     ctx.fillStyle = '#121a35';
     var ci, cActive = colOf(cannonX);
     for (ci = 0; ci < colN; ci++) {
       ctx.fillStyle = '#121a35'; ctx.fillRect(colX0[ci], BASE_BOTTOM, colX1[ci] - colX0[ci], TRACK_Y - BASE_BOTTOM);
       if (ci === cActive) { ctx.fillStyle = 'rgba(77,163,255,0.07)'; ctx.fillRect(colX0[ci], BASE_BOTTOM, colX1[ci] - colX0[ci], TRACK_Y - BASE_BOTTOM); }
     }
-    ctx.fillStyle = '#5b6483';                          // lane dividers: solid, with pressure doors (HP counters) or breached gaps
-    for (ci = 0; ci < colN - 1; ci++) ctx.fillRect(colX1[ci], BASE_BOTTOM, DIV_W, TRACK_Y - BASE_BOTTOM);
-    for (k = 0; k < doorCount; k++) {
-      var dX = colX1[doorDiv[k]], dY0 = doorY0[k], dH = doorY1[k] - doorY0[k], dr = doorHP[k] / doorMax[k];
-      if (doorOpen[k]) {                                // breached: a gap through the divider
-        ctx.fillStyle = '#121a35'; ctx.fillRect(dX - 1, dY0, DIV_W + 2, dH);
-        ctx.fillStyle = 'rgba(255,170,70,0.6)'; ctx.fillRect(dX - 1, dY0, DIV_W + 2, 2); ctx.fillRect(dX - 1, dY0 + dH - 2, DIV_W + 2, 2);
-        continue;
-      }
-      var dcol = dr > 0.66 ? '#e6c84a' : (dr > 0.33 ? '#f08a2e' : '#e0344a');   // yellow -> orange -> red as it takes damage
-      ctx.fillStyle = dcol; ctx.fillRect(dX - 5, dY0, DIV_W + 10, dH);
-      ctx.fillStyle = doorFlash[k] > 0 ? 'rgba(255,255,255,' + Math.min(0.9, doorFlash[k]) + ')' : 'rgba(0,0,0,0.25)'; ctx.fillRect(dX - 5, dY0, DIV_W + 10, dH);
-      ctx.strokeStyle = 'rgba(30,10,10,0.8)'; ctx.lineWidth = 1.5;
-      var ncrack = dr > 0.66 ? 0 : (dr > 0.33 ? 2 : 4);                           // cracks spread as HP drops
-      for (var ck = 0; ck < ncrack; ck++) {
-        var cy0 = dY0 + (ck + 0.5) * dH / ncrack;
-        ctx.beginPath(); ctx.moveTo(dX - 5, cy0); ctx.lineTo(dX + 1, cy0 + 5); ctx.lineTo(dX - 1, cy0 - 3); ctx.lineTo(dX + DIV_W + 5, cy0 + 4); ctx.stroke();
-      }
-      ctx.fillStyle = '#fff'; ctx.font = '900 14px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(String(doorHP[k]), dX + DIV_W / 2, dY0 + dH / 2);
-    }
-    ctx.fillStyle = '#5b6483';                          // outer walls of the active span
+    ctx.fillStyle = '#8a93b8';                          // outer walls of the active span (brighter: they are the funnel boundary)
     ctx.fillRect(AX0 - 3, BASE_BOTTOM, 3, TRACK_Y - BASE_BOTTOM); ctx.fillRect(AX1, BASE_BOTTOM, 3, TRACK_Y - BASE_BOTTOM);
     // Danger line at the cannon
     ctx.strokeStyle = 'rgba(255,70,90,0.35)';
     ctx.lineWidth = 1;
     ctx.setLineDash([6, 6]);
     ctx.beginPath();
-    ctx.moveTo(10, CANNON_Y); ctx.lineTo(W - 10, CANNON_Y);
+    ctx.moveTo(AX0, CANNON_Y); ctx.lineTo(AX1, CANNON_Y);
     ctx.stroke();
     ctx.setLineDash([]);
 
@@ -1454,6 +1557,7 @@
     // Gates
     ctx.font = '800 22px system-ui, sans-serif';
     for (var gi = 0; gi < gateCount; gi++) {
+      if (!gateOn[gi]) continue;
       var g = GATES[gi], f = gateFlash[gi];
       var isMul = g.type === 'x', isNeg = g.type === '-' || g.type === '/';
       ctx.fillStyle = isNeg ? 'rgba(255,70,90,' + (0.35 + f * 0.4) + ')'
@@ -1478,14 +1582,6 @@
       ctx.fillStyle = edgeC; ctx.fillRect(tCX[i] - tHW[i] - 2, tCY[i] - tHH[i] - 2, tHW[i] * 2 + 4, tHH[i] * 2 + 4);
       ctx.fillStyle = fillC; ctx.fillRect(tCX[i] - tHW[i], tCY[i] - tHH[i], tHW[i] * 2, tHH[i] * 2);
       if (bt < 3) { ctx.fillStyle = '#fff'; ctx.fillText(String(tHits[i]), tCX[i], tCY[i] + 1); }
-    }
-    // Multiplier zones: translucent x2 band across the column with a countdown
-    for (i = 0; i < zoneCount; i++) {
-      var zx0 = colX0[zoneCol[i]], zw = colX1[zoneCol[i]] - zx0, za = 0.18 + 0.12 * Math.sin(clock * 6) + (zoneT[i] < 2 ? -0.1 : 0) + zoneFlash * 0.2;
-      ctx.fillStyle = 'rgba(80,190,255,' + (za < 0.05 ? 0.05 : za) + ')'; ctx.fillRect(zx0, zoneY[i] - ZONE_H / 2, zw, ZONE_H);
-      ctx.strokeStyle = 'rgba(140,220,255,0.7)'; ctx.lineWidth = 1.5; ctx.strokeRect(zx0, zoneY[i] - ZONE_H / 2, zw, ZONE_H);
-      ctx.fillStyle = '#fff'; ctx.font = '900 16px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText('x2  ' + Math.ceil(zoneT[i]) + 's', zx0 + zw / 2, zoneY[i] + 1);
     }
     // Supply crate and falling pills
     if (crateActive) {
@@ -1517,13 +1613,18 @@
         ctx.fillStyle = wd ? rt.wound : rt.color;
         ctx.beginPath();
         for (i = 0; i < redCount; i++) {
-          if (rtype[i] !== ty || (rhp[i] < RT_HP[ty]) !== (wd === 1)) continue;
+          if (rtype[i] !== ty || (rhp[i] < rmax[i]) !== (wd === 1)) continue;
           ctx.moveTo(rx[i] + rr2, ry[i]);
           ctx.arc(rx[i], ry[i], rr2, 0, 6.2832);
         }
         ctx.fill();
       }
     }
+
+    // Vertical Surge: surging mobs glow hot
+    ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 2.5; ctx.beginPath();
+    for (i = 0; i < redCount; i++) if (rsurge[i] > 0) { var sr = RT_RAD[rtype[i]] + 1.5; ctx.moveTo(rx[i] + sr, ry[i]); ctx.arc(rx[i], ry[i], sr, 0, 6.2832); }
+    ctx.stroke();
 
     // Boss (mothership): wide rounded hull
     if (bossActive) {
@@ -1622,21 +1723,21 @@
     var heatMix = baseHeat * (0.5 + 0.5 * Math.sin(clock * 55));
     var shake = Math.sin(clock * 90) * baseHeat * 2;
     ctx.fillStyle = 'rgb(' + ((216 + 39 * heatMix) | 0) + ',' + ((58 + 80 * heatMix) | 0) + ',' + ((74 + 64 * heatMix) | 0) + ')';
-    roundRect(10 + shake, BY, W - 20, BASE_H, 14);
+    roundRect(AX0 + shake, BY, AX1 - AX0, BASE_H, 14);
     ctx.fill();
     ctx.fillStyle = '#fff';
     ctx.font = '700 28px system-ui, sans-serif';
     ctx.textAlign = 'center';
     var showHP = isBossLevel ? bossHP : baseHP, showMax = isBossLevel ? bossMaxHP : baseMaxHP;
-    ctx.fillText(isBossLevel ? 'BOSS ' + fmt(bossActive ? bossHP : bossMaxHP) : fmt(baseHP) + ' HP', W / 2 + shake, BY + BASE_H / 2 - 6);
+    ctx.fillText(isBossLevel ? 'BOSS ' + fmt(bossActive ? bossHP : bossMaxHP) : fmt(baseHP) + ' HP', (AX0 + AX1) / 2 + shake, BY + BASE_H / 2 - 6);
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
-    ctx.fillRect(30, BY + BASE_H - 14, W - 60, 6);
+    ctx.fillRect(AX0 + 16, BY + BASE_H - 14, AX1 - AX0 - 32, 6);
     if (!isBossLevel) {
       ctx.fillStyle = '#ffe27a';                       // chip-damage trail
-      ctx.fillRect(30, BY + BASE_H - 14, (W - 60) * (ghostHP / showMax), 6);
+      ctx.fillRect(AX0 + 16, BY + BASE_H - 14, (AX1 - AX0 - 32) * (ghostHP / showMax), 6);
     }
     ctx.fillStyle = isBossLevel ? '#ff9a3c' : '#7dff9a';
-    ctx.fillRect(30, BY + BASE_H - 14, (W - 60) * ((bossActive || !isBossLevel ? showHP : showMax) / showMax), 6);
+    ctx.fillRect(AX0 + 16, BY + BASE_H - 14, (AX1 - AX0 - 32) * ((bossActive || !isBossLevel ? showHP : showMax) / showMax), 6);
 
     // Screen flash when the cannon is hit
     if (cannonFlash > 0) {
@@ -1652,8 +1753,8 @@
     var dt = (t - last) / 1000;
     last = t;
     if (dt > MAX_DT) dt = MAX_DT;
-    if (dt > 0) update(dt);
-    render(); renderHud();
+    try { if (dt > 0) update(dt); render(); renderHud(); }
+    catch (err) { tuneError(err, 'frame'); }                  // an exception must never kill the rAF chain (that is what looked like a freeze); it is shown in the tuning panel instead
     rafId = requestAnimationFrame(frame);
   }
   document.addEventListener('visibilitychange', function () { if (document.hidden) setPaused(true); last = performance.now(); });   // backgrounding auto-pauses
@@ -1664,7 +1765,7 @@
       update: update, reset: reset, gates: GATES, restart: onRestart, generateLevel: generateLevel,
       MAX_WAVE: MAX_WAVE,
       setLevel: function (n) { level = n; reset(); }, warp: warpTo,
-      setGates: function (defs) { gateCount = defs.length; for (var q = 0; q < defs.length; q++) cfgGate(GATES[q], defs[q]); },
+      setGates: function (defs) { gateCount = defs.length; for (var q = 0; q < defs.length; q++) { cfgGate(GATES[q], defs[q]); gateOn[q] = 1; } },
       setObstacles: function (o) {
         setTerrain(o.terrain || []);
         bumpCount = (o.bumpers || []).length; holeCount = (o.holes || []).length;
@@ -1674,15 +1775,13 @@
       get: function () {
         var sl = Array.prototype.slice;
         return { mobCount: mobCount, redCount: redCount, baseHP: baseHP, cannonHP: cannonHP, state: state,
-                 level: level, gateCount: gateCount, bumpCount: bumpCount, holeCount: holeCount,
+                 level: level, gateCount: gateCount, gatesActive: (function () { var q = 0; for (var z = 0; z < gateCount; z++) q += gateOn[z]; return q; })(), gateCap: gateCap, bumpCount: bumpCount, holeCount: holeCount,
                  isBoss: isBossLevel, bossActive: bossActive, bossHP: bossHP, bossMaxHP: bossMaxHP, bossY: bossY, bossX: bossX,
                  capBlue: MAX_MOBS, capRed: MAX_RED,
                  redX: sl.call(rx, 0, redCount), redY: sl.call(ry, 0, redCount), redHP: sl.call(rhp, 0, redCount), redType: sl.call(rtype, 0, redCount),
-                 waveQueue: waveQueue, threatQueue: tq[0] + tq[1] + tq[2] + tq[3], tq: Array.prototype.slice.call(tq), crateTimer: crateTimer, terrainCount: terrainCount,
+                 waveQueue: waveQueue, crateTimer: crateTimer, terrainCount: terrainCount,
                  cols: colN, colX0: Array.prototype.slice.call(colX0, 0, colN), colX1: Array.prototype.slice.call(colX1, 0, colN), AX0: AX0, AX1: AX1,
-                 doorCount: doorCount, doorHP: Array.prototype.slice.call(doorHP, 0, doorCount), doorMax: Array.prototype.slice.call(doorMax, 0, doorCount), doorDiv: Array.prototype.slice.call(doorDiv, 0, doorCount),
-                 doorY0: Array.prototype.slice.call(doorY0, 0, doorCount), doorY1: Array.prototype.slice.call(doorY1, 0, doorCount), doorOpen: Array.prototype.slice.call(doorOpen, 0, doorCount),
-                 zoneCount: zoneCount, zoneCol: Array.prototype.slice.call(zoneCol, 0, zoneCount), zoneY: Array.prototype.slice.call(zoneY, 0, zoneCount), zoneT: Array.prototype.slice.call(zoneT, 0, zoneCount),
+                 surges: surges, surging: (function () { var q = 0; for (var z = 0; z < redCount; z++) if (rsurge[z] > 0) q++; return q; })(), rsurge: Array.prototype.slice.call(rsurge, 0, redCount),
                  redVY: Array.prototype.slice.call(rvy, 0, redCount), redVX: Array.prototype.slice.call(rvx, 0, redCount),
                  barr: (function () { var o = []; for (var q = 0; q < terrainCount; q++) o.push({ x: tCX[q], y: tCY[q], hw: tHW[q], hh: tHH[q], type: tType[q], hits: tHits[q] }); return o; })(), crateActive: crateActive, crateX: crateX, crateY: crateY, crateHP: crateHP,
                  pillCount: pillCount, pillX: sl.call(pillX, 0, pillCount), pillY: sl.call(pillY, 0, pillCount), powerName: powerName, powerLeft: powerLeft,
@@ -1697,8 +1796,8 @@
       spawnBoss: spawnBoss, calculateLevelMTM: calculateLevelMTM, tierOf: tierOf, levelThroughput: levelThroughput,
       Armory: Armory, RedMobTypes: RedMobTypes, equip: equip,
       RED_SPEED_CAP: RED_SPEED_CAP, CRATE_HP: CRATE_HP, POWER_TIME: POWER_TIME,
-      setTerrain: setTerrain, setColumns: setColumns, openField: function () { colN = 1; colX0[0] = 10; colX1[0] = W - 10; AX0 = 10; AX1 = W - 10; doorCount = 0; },
-      colOf: colOf, columnCount: columnCount, colSpan: colSpan, DIV_W: DIV_W, DOOR_H: DOOR_H, COL_W: COL_W, crushHit: crushHit, setDoors: function (l) { doorCount = l.length; for (var q = 0; q < doorCount; q++) { doorDiv[q] = l[q][0]; doorY0[q] = l[q][1]; doorY1[q] = l[q][2]; doorHP[q] = doorMax[q] = l[q][3]; doorOpen[q] = 0; } }, spawnZone: function (c, y) { zoneCol[zoneCount] = c; zoneY[zoneCount] = y; zoneT[zoneCount] = ZONE_TIME; zoneCount++; }, ZONE_TIME: ZONE_TIME, redGravity: RED_GRAV, spawnCrate: spawnCrate, spawnPill: function (x, y, t) { spawnPill(x, y); if (t !== undefined) pillT[pillCount - 1] = t; },
+      setTerrain: setTerrain, setColumns: setColumns, openField: function () { colN = 1; colX0[0] = 10; colX1[0] = W - 10; AX0 = 10; AX1 = W - 10; },
+      colOf: colOf, columnCount: columnCount, colSpan: colSpan, COL_W: COL_W, gateRoll: rollGate, redGravity: RED_GRAV, spawnCrate: spawnCrate, spawnPill: function (x, y, t) { spawnPill(x, y); if (t !== undefined) pillT[pillCount - 1] = t; },
       setCrateTimer: function (t) { crateTimer = t; }, queueWave: queueWave,
       clearReds: function () { redCount = 0; waveQueue = 0; for (var q = 0; q < MAX_COLS; q++) { wq[q] = 0; pa[q] = 0; } },
       // Dry-run of one blue launched at x0 (terrain only): returns {x: [...], t: [...]} where it crosses each y in ys (bots use this to aim round terrain)
@@ -1727,7 +1826,7 @@
       setBossSpeed: function (pxPerSec) { bossSpeed = pxPerSec; },
       spawnBlue: function (x, y, vx, vy, mask) { return spawnMob(x, y, vx, vy, mask || 0); },
       spawnRed: spawnRed,
-      setFlags: function (f) { if ('fire' in f) autoFire = f.fire; if ('spawner' in f) spawnerOn = f.spawner; if ('threats' in f) threatsOn = f.threats; }
+      setFlags: function (f) { if ('fire' in f) autoFire = f.fire; if ('spawner' in f) spawnerOn = f.spawner; }
     };
   }
 

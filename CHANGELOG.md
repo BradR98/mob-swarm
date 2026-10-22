@@ -7,11 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Install button
-- A small "Install app" pill appears at the bottom only when the browser fires `beforeinstallprompt` (installable and not installed); the Chrome menu item can report a stale "already installed". Version label `v18 · c20`, cache `mob-swarm-v20`.
-
-### PWA install id fix
-- The manifest `id` was `./index.html`. Browsers resolve `id` against the ORIGIN, so it became `https://bradr98.github.io/index.html`, shared with other games using that id; Chrome then reported "already installed". The id is now `/mob-swarm/` (unique). Version label `v18 · c19`, cache `mob-swarm-v19`. Gameplay is unchanged.
+### Phase 19 - single chute / funnel (v19 / cache c21)
+Consolidates the funnel branch experiments (detailed per-step history lives in git).
+- **One 96px chute** replaces the 1-4 column board: no dividers, lanes, pressure doors, multiplier zones, trapdoors, spill or threat budget. Reds fall from a centre mouth; the chute narrows 96 -> 84px over L5-9. Dead code for all of those was swept out; the column arrays (`MAX_COLS = 1`) remain only because the L99 sandbox uses them, and blue barricades are retired (generator forces gray/red).
+- **RNG gate drops**: gate values are rolled per gate (`rollGate`) inside a level window (`gateWinBase`): L4-5 x1.2-1.8, ramping to x1.8 at L9 (window factor 1.0 -> 0.82), L10+ never above x3.0; '+' gates = window - 1. From L7 there are exactly 2 positive gates.
+- **Gate concurrency cap** by blue count (`gateOn`/`gateCap`: 1 / 2 / unlimited) so the chute cannot be flooded by every gate at once.
+- **Vertical Surge**: 5+ stalled touching mobs in a pile-up get +50% speed and 1.5 s knockback immunity (3 s cooldown). Only fires on barricade pile-ups (L3+).
+- **Density tiers** (`densityFor`/`densityTier`): 1.0 on L1-2, 1.5 on L3, 1.8 on L4-5, ramp to 2.2 at L9, then per-tier. Red HP grows x1.15 per level from L5 (rounds away until ~L8).
+- **Level 9 reshape (`effLevel`)**: the vetted settings (chute 84, density 2.2, speed 140, HP 1, 2 gates, ceiling x1.8, damage 1, bullets 1) are Level 9. L1-5 unchanged, L6-8 ramp, L10+ follow the old curve shifted +3 (unvetted).
+- **Tuning harness** (`window.TUNING`, `#debug-harness` panel, Copy Settings, PWA install diagnostics). **Hidden by default on `main`** (`TUNE_DEFAULT_ON = false`; show with `#tune`); visible by default on the funnel test build, which stays the testing environment. To be removed from `main` later.
+- **PWA**: manifest `id` is now the app's own path (`/mob-swarm/`; funnel `/funnelswarm/`) instead of `./index.html`, which collided across games on bradr98.github.io. Funnel build lives at https://bradr98.github.io/funnelswarm/ with a funnel icon and its own name. `main` gained an "Install app" pill (`beforeinstallprompt`).
+- **Tests**: `test/headless.js` rewritten for the single chute (column/door/zone/threat tests removed; gate windows, chute width, gate count and effLevel-shifted tier checks added); runs in a stubbed DOM (163 checks).
+- Known gaps: levels 10+ are shifted old curves and unvetted; the pour/sandbox spawn is blocked when crowded (L99 piles ~270 reds vs ~700 before); build label `v19 · c21` on `main`, `funnel vNN` on the test build.
 
 ### Phase 15 - soft collisions and the L99 physics sandbox
 - **Soft collisions:** the rigid separation (90% of an overlap per pass) is replaced by over-relaxed "soft resolving": ~20% of a light overlap per frame (3 passes of RED_SOFT/3), ramping up only for deep overlaps (> 55% of a body) so a pile compresses and flows like mud but cannot collapse into a blob. Sideways velocity also bleeds off faster (viscous).

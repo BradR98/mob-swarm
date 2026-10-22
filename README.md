@@ -18,8 +18,8 @@ Short version below; the full description is in [ARCHITECTURE.md](ARCHITECTURE.m
 
 Procedurally generated, seeded levels (each level is always the same board).
 
-- **Levels 1-8 (Tier 1)**: one endless pour of reds (45/s on L1, +2% per level) that never stops; only the enemy base reaching 0 HP ends the level. Columns: L1-2 one, L3-5 two, L6-9 three, L10+ four. Level 1 base HP is 250.
-- **Obstacles unlock by tier**: multiplier gates (L3+), negative gates (L11+), pinball bumpers (L31+), black holes (L51+); barricades (gray, blue = x2 zone, red), pressure doors and supply crates with power-ups.
+- **Levels 1-8 (Tier 1)**: one endless pour of reds (45/s on L1, +2% per level) that never stops; only the enemy base reaching 0 HP ends the level. One narrow centre chute (96px, narrowing to 84px by L9); gate values are rolled at random inside a per-level window. Level 1 base HP is 250.
+- **Obstacles unlock by tier**: multiplier gates (L3+), negative gates (L11+, unvetted), pinball bumpers (L31+), black holes (L51+); barricades (gray, red), and supply crates with power-ups.
 - **Every 10th level is a boss fight.** Levels 9+ and bosses still use the older timed-wave balance (see [BACKLOG.md](BACKLOG.md)).
 - **Weapon**: 22 shots/s, each blue cleaves 2 red HP, wide random spray. The cannon has 5 HP; a red crossing the cannon line costs 1.
 
@@ -27,7 +27,7 @@ Procedurally generated, seeded levels (each level is always the same board).
 
 | Input | Action |
 |-------|--------|
-| Touch / mouse drag horizontally (anywhere on the screen) | Steer the cannon across the lanes |
+| Touch / mouse drag horizontally (anywhere on the screen) | Steer the cannon |
 | Hold / keep touching | Fire continuously; releasing stops fire |
 | Pause button (top right) | Pause; the overlay has a Level box + Warp button to jump to any level |
 | Mute button | Toggle audio |
@@ -54,7 +54,7 @@ The service worker caches the game for offline play. Each release bumps the cach
 ## Developer tools
 
 - **Level warp**: Level box + Warp on the pause / end screens, or `?level=N` / `#level=N` in the URL.
-- **Level 99** is a physics sandbox: one wide column, 30 reds/s pouring onto an indestructible plug, no win or loss, cannon enabled.
+- **Level 99** is a physics sandbox: one wide chute, ~30 reds/s pouring onto an indestructible plug, no win or loss, cannon enabled.
 - **`#debug`** exposes `window.__mob` (state + hooks) for the tests.
 
 ## Testing

@@ -1,12 +1,13 @@
 # Project Status
 
-_Last updated: 2026-10-11_
+_Last updated: 2026-10-22_
 
 | Field | Value |
 |-------|-------|
-| **Current Phase** | Phase 18 shipped: v18 / cache c18 live on `main` (tilted world + flat HUD, endless pour on L1-8, 22 shots/s cleave-2 weapon, L1 base HP 250). Headless suite green (~200 checks). Not device-tested. |
-| **Active Focus** | Rebalance Levels 9+ and bosses for the new weapon and HP scale (BACKLOG P16-5, P17-4); real-device playtest |
+| **Current Phase** | Phase 19 (v19 / cache c21): single 96px chute, RNG gates, Vertical Surge, density tiers, L9 reshape. Tuning panel hidden on `main` (`#tune`). Headless suite green (163 checks). Not device-tested. |
+| **Active Focus** | Vet levels 10+ and bosses on the chute model; real-device playtest; remove the tuning panel from `main` |
 | **Known Blockers** | None |
+| **Test build** | `feature/funnel-logic` -> https://bradr98.github.io/funnelswarm/ keeps the tuning panel visible; it is the testing environment. |
 
 ## Tech Stack Constraints
 

@@ -119,3 +119,15 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done. Suggested model: **Sonnet** =
 | P18-1 | HP curve x1/3, L1 base = 250 | [x] | Pro |
 | P18-2 | Tilt locked and merged | [x] | Pro |
 | P18-3 | Player-facing gameplay guide (how to play, gates, barricades, doors, power-ups, tips; in-game or docs page) | [ ] | Sonnet |
+- [ ] Player Gameplay Guide: how to play, gates, barricades, doors, power-ups, tips.
+
+## Phase 19: Single chute / funnel
+| ID | Task | Status | Model |
+|----|------|--------|-------|
+| P19-1 | Single-chute pivot, RNG gates, Vertical Surge, density tiers, L9 reshape | [x] | Pro |
+| P19-2 | Sweep dead column/door/zone/threat code, rewrite headless suite | [x] | Pro |
+| P19-3 | Vet levels 10+ and bosses on the chute model | [ ] | Pro |
+| P19-4 | Remove the tuning panel from `main` entirely | [ ] | Sonnet |
+| P19-5 | Unify PWA ids of the other apps on bradr98.github.io (declined for now) | [ ] | Sonnet |
+
+> Obsolete (superseded by the single chute): P11 columns/trapdoors, P12-2/P12-3 column count and threat budget, P13-3 zones, P14 doors, P15-4 door balance.
